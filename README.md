@@ -1,94 +1,94 @@
 # AI Usage Bar
 
-macOS menu-bar app showing Claude Code + Codex usage. Auto-detects each CLI
-by the presence of `~/.claude` / `~/.codex`. No configuration.
+> See Claude Code and Codex usage before a limit surprises you.
 
-## Menu bar
+AI Usage Bar is a small macOS menu-bar app for people who use Claude Code,
+Codex, or both. It shows today's token activity and the remaining time and
+percentage in each provider's active rate-limit window.
 
-`✳ 42%  ◇ 63%` — remaining % of the tightest live limit window per provider.
-Falls back to today's token total when a limit reading isn't available.
+[Download a preview release](https://github.com/PerthTheIamCat/AI_Usage/releases)
+· [Report an issue](https://github.com/PerthTheIamCat/AI_Usage/issues)
 
-Click for the breakdown:
+**Requirements:** macOS 13 or later · Apple Silicon · Claude Code and/or Codex
+already installed and signed in.
 
-- **Rate limits** — 5-hour and weekly windows: % remaining, a 10-cell meter,
-  and time until reset.
-- **Today's tokens** — input / output / cache / reasoning, session count,
-  last model.
+## What it shows
 
-## Where the numbers come from
+`✳ 42%  ◇ 63%` in the menu bar means the tightest remaining limit for Claude
+and Codex. Click it for the full picture:
 
-| Provider | Token counts | Rate-limit % |
-|----------|--------------|--------------|
-| Claude   | `~/.claude/projects/**/*.jsonl` (today) | live `GET api.anthropic.com/api/oauth/usage` |
-| Codex    | `~/.codex/sessions/**/*.jsonl` (today)  | `rate_limits` in the session logs |
+- **Rate limits** — remaining percentage, 5-hour and weekly windows, a compact
+  meter, and reset time.
+- **Today's tokens** — input, output, cache, reasoning, session count, and the
+  most recent model.
+- **Freshness** — when a value was last updated, so an old Codex session does
+  not look like a current limit reading.
 
-### Claude limits — auth model
+No setup screen. The app detects the CLIs from `~/.claude` and `~/.codex`.
 
-The app reads the access token the Claude CLI already stored in the login
-keychain (`Claude Code-credentials`) and calls the same usage endpoint the CLI
-uses. It is **read-only**:
+## Install and use
 
-- It never refreshes or rewrites the token. OAuth refresh tokens are
-  single-use — rotating one here would invalidate the CLI's own token and log
-  you out.
-- The stored `expiresAt` is **not** trusted — observed tokens keep returning
-  `200` well past it. Authority is the server: `401` → shows `login`, `200` →
-  live percentages.
+1. Open the [Releases](https://github.com/PerthTheIamCat/AI_Usage/releases)
+   page and download the `macos-arm64.zip` file.
+2. Double-click the ZIP, then move `AIUsageBar.app` to `/Applications` if you
+   want to keep it there.
+3. Open `AIUsageBar.app`.
+   - Current preview builds use ad-hoc signing. If macOS blocks the first
+     launch, Control-click the app, choose **Open**, then confirm **Open**.
+4. If you use Claude Code, macOS asks whether AIUsageBar may access
+   `Claude Code-credentials` in Keychain. Choose **Always Allow** to show live
+   Claude limits.
+5. Click the menu-bar icon whenever you want the detailed breakdown. Press
+   `⌘R` or choose **Refresh Now** to request a fresh reading.
 
-First launch triggers one macOS keychain prompt ("AIUsageBar wants to use
-Claude Code-credentials") — click **Always Allow**.
+To start it automatically: **System Settings → General → Login Items → Add**
+`AIUsageBar.app`.
 
-The usage endpoint rate-limits hard, so the app polls it only every 5 minutes
-(10 after a `429`), caches the last good reading, and shows `…` while a `429`
-clears. Token counts still refresh every 60s independently. Don't hammer
-"Refresh Now" — each click forces a live call and can trip the `429` cooldown.
+## How data is handled
 
-### Codex limits — freshness
+| Provider | Today's usage | Rate-limit reading |
+| --- | --- | --- |
+| Claude | Local Claude Code session logs | Claude usage endpoint, using the existing Keychain access token |
+| Codex | Local Codex session logs | Latest `rate_limits` entry written by Codex |
 
-Codex writes its `rate_limits` (5-hour `primary`, weekly `secondary`) into
-session logs, so the app reads the newest reading on disk. There is no live
-API, so a window is only as fresh as your last Codex session. A window whose
-reset time has already passed is shown as "window reset — reopen CLI for a
-fresh reading" rather than a stale percentage. The menu shows the reading's age.
+The app never refreshes, rotates, or writes Claude credentials. It uses the
+existing access token only to read the usage endpoint. Codex readings are local
+and are only as fresh as the latest Codex session that wrote them.
 
-## Build / run
+Claude's usage endpoint rate-limits requests. AI Usage Bar updates token counts
+every minute, polls Claude limits every five minutes, and backs off longer after
+a `429`. Use **Refresh Now** sparingly.
+
+## Limits to know
+
+- Release builds currently target Apple Silicon (`arm64`) only.
+- A Codex limit window may be stale until you open Codex again.
+- When a Claude request is rate-limited, the app shows `…` until the next
+  allowed refresh instead of guessing a percentage.
+- Preview releases are not yet Developer ID signed or notarized.
+
+## Build from source
 
 ```sh
-swift build -c release          # binary at .build/release/AIUsageBar
-./make-app.sh                   # bundles + ad-hoc signs AIUsageBar.app
+swift build -c release
+./make-app.sh
 open AIUsageBar.app
 
-.build/release/AIUsageBar --dump   # print current numbers, no UI
+# Print current readings without opening the menu-bar UI
+.build/release/AIUsageBar --dump
 ```
 
-Refreshes every 60s; "Refresh Now" (⌘R) forces it. Launch at login:
-System Settings → General → Login Items → add `AIUsageBar.app`.
+## Releases for maintainers
 
-## Release build
+Push a version tag such as `v0.1.1`. GitHub Actions builds an Apple Silicon ZIP
+and SHA-256 checksum, then publishes a prerelease automatically. For a tag that
+already exists, run **Publish release** manually from GitHub Actions and enter
+the tag name.
 
 ```sh
-./make-release.sh 0.1.0          # creates arm64 ZIP + SHA-256 checksum
+./make-release.sh 0.1.1
 ```
 
-Current release artifacts target Apple Silicon Macs (`arm64`) running macOS 13
-or later. The local build uses ad-hoc signing; public distribution should use
-Developer ID signing and Apple notarization.
+## License
 
-Pushing a `v*` tag runs the GitHub Actions **Publish release** workflow. It
-builds the same ZIP and SHA-256 checksum on a macOS ARM runner, then creates a
-GitHub prerelease. To publish a tag that existed before the workflow, run it
-manually from GitHub Actions and enter the tag name (for example, `v0.1.0`).
-
-## Status
-
-Codex limits + both token counts are verified against real logs on this
-machine. The Claude live-limit path is built to the response schema extracted
-from the Claude Code binary (`five_hour`/`seven_day` → `utilization`,
-`resets_at`).
-
-Auth to the usage endpoint is **confirmed working**: the keychain access token
-returns `429` (rate-limited), never `401` — i.e. it authenticates. A clean
-`200` body hasn't been captured yet only because repeated probing tripped the
-endpoint's rate limit (a long cooldown). Once it clears, the app renders real
-percentages; click "Refresh Now" after the app has been idle a while, or just
-wait for the 5-minute poll.
+[MIT](LICENSE)
