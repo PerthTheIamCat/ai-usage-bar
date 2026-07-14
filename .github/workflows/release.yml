@@ -1,0 +1,51 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-14
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Build Apple Silicon release asset
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
+        run: ./make-release.sh "${TAG_NAME#v}" "$BUILD_NUMBER"
+
+      - name: Create or update prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version="${TAG_NAME#v}"
+          assets=(
+            "AIUsageBar-v${version}-macos-arm64.zip"
+            "AIUsageBar-v${version}-macos-arm64.zip.sha256"
+          )
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG_NAME" "${assets[@]}" \
+              --title "$TAG_NAME" \
+              --generate-notes \
+              --prerelease
+          fi

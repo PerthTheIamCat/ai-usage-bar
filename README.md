@@ -74,6 +74,11 @@ Current release artifacts target Apple Silicon Macs (`arm64`) running macOS 13
 or later. The local build uses ad-hoc signing; public distribution should use
 Developer ID signing and Apple notarization.
 
+Pushing a `v*` tag runs the GitHub Actions **Publish release** workflow. It
+builds the same ZIP and SHA-256 checksum on a macOS ARM runner, then creates a
+GitHub prerelease. To publish a tag that existed before the workflow, run it
+manually from GitHub Actions and enter the tag name (for example, `v0.1.0`).
+
 ## Status
 
 Codex limits + both token counts are verified against real logs on this
