@@ -2,8 +2,8 @@
 # Build AIUsageBar.app bundle from the Swift package.
 set -e
 cd "$(dirname "$0")"
-VERSION="${VERSION:-0.2.0}"
-BUILD_NUMBER="${BUILD_NUMBER:-2}"
+VERSION="${VERSION:-0.2.1}"
+BUILD_NUMBER="${BUILD_NUMBER:-3}"
 swift build -c release
 APP=AIUsageBar.app
 rm -rf "$APP"
@@ -17,6 +17,9 @@ fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
 cp .build/release/AIUsageBar "$APP/Contents/MacOS/AIUsageBar"
 cp -R "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/"
+# SwiftPM links Sparkle through @rpath but does not add the app-bundle framework
+# location. Add it before signing so launchd and Finder can load the copy above.
+install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/AIUsageBar"
 SPARKLE_APP_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
 
 # This app is not sandboxed, so Sparkle's optional XPC services are unnecessary.

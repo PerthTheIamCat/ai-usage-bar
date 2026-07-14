@@ -83,7 +83,7 @@ open AIUsageBar.app
 
 ## Releases for maintainers
 
-Push a version tag such as `v0.2.0`. GitHub Actions builds an Apple Silicon ZIP
+Push a version tag such as `v0.2.1`. GitHub Actions builds an Apple Silicon ZIP
 and SHA-256 checksum, publishes a prerelease, then signs and deploys the
 Sparkle update feed to GitHub Pages. The private Sparkle key is stored only as
 the `SPARKLE_PRIVATE_KEY` repository secret; never commit it. For a tag that
@@ -91,7 +91,7 @@ already exists, run **Publish release** manually from GitHub Actions and enter
 the tag name.
 
 ```sh
-./make-release.sh 0.2.0 2
+./make-release.sh 0.2.1 3
 ```
 
 ## License
