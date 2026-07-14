@@ -34,18 +34,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
+          set -euo pipefail
           version="${TAG_NAME#v}"
           assets=(
             "AIUsageBar-v${version}-macos-arm64.zip"
             "AIUsageBar-v${version}-macos-arm64.zip.sha256"
           )
+          notes_file="$(mktemp)"
+          trap 'rm -f "$notes_file"' EXIT
+
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { in_section = 1; next }
+            in_section && /^## \[/ { exit }
+            in_section { print }
+          ' CHANGELOG.md > "$notes_file"
+
+          if [[ ! -s "$notes_file" ]]; then
+            echo "No CHANGELOG.md section found for $version" >&2
+            exit 1
+          fi
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+            gh release edit "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file "$notes_file" \
+              --prerelease
           else
             gh release create "$TAG_NAME" "${assets[@]}" \
               --title "$TAG_NAME" \
-              --generate-notes \
+              --notes-file "$notes_file" \
               --prerelease
           fi
 
