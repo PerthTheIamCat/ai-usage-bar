@@ -30,9 +30,15 @@ struct CodexUsage {
     var sessionCount = 0
 }
 
+struct AntigravityUsage {
+    var totalPrompts = 0
+    var sessionCount = 0
+}
+
 struct UsageSnapshot {
-    var claude: ClaudeUsage?  // nil = not detected
-    var codex: CodexUsage?    // nil = not detected
+    var claude: ClaudeUsage?       // nil = not detected
+    var codex: CodexUsage?         // nil = not detected
+    var antigravity: AntigravityUsage? // nil = not detected
     var claudeLimits: ClaudeLimits?
     var codexLimits: CodexLimits?
     var updatedAt = Date()

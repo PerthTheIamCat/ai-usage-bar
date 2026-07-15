@@ -5,6 +5,8 @@ enum UsageReader {
         .appendingPathComponent(".claude/projects")
     static let codexDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".codex/sessions")
+    static let antigravityDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".gemini/antigravity-cli")
 
     /// - Parameter fetchClaudeLimits: when false, skips the Claude usage API
     ///   call (leaving `claudeLimits == nil`) so the caller can throttle that
@@ -19,6 +21,9 @@ enum UsageReader {
         if fm.fileExists(atPath: codexDir.path) {
             snap.codex = readCodexToday()
             snap.codexLimits = codexLimits()
+        }
+        if fm.fileExists(atPath: antigravityDir.path) {
+            snap.antigravity = readAntigravityToday()
         }
         snap.updatedAt = Date()
         return snap
@@ -246,6 +251,28 @@ enum UsageReader {
             usage.totalTokens += t["total_tokens"] ?? 0
             usage.sessionCount += 1
         }
+        return usage
+    }
+
+    private static func readAntigravityToday() -> AntigravityUsage {
+        var usage = AntigravityUsage()
+        let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
+        guard FileManager.default.fileExists(atPath: historyFile.path) else { return usage }
+        var uniqueSessions = Set<String>()
+        forEachLine(of: historyFile) { line in
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let timestampMS = obj["timestamp"] as? Double
+            else { return }
+            let date = Date(timeIntervalSince1970: timestampMS / 1000.0)
+            if Calendar.current.isDateInToday(date) {
+                usage.totalPrompts += 1
+                if let sessionID = obj["conversationId"] as? String {
+                    uniqueSessions.insert(sessionID)
+                }
+            }
+        }
+        usage.sessionCount = uniqueSessions.count
         return usage
     }
 }
