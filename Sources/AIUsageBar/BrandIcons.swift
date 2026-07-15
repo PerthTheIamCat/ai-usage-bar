@@ -51,9 +51,11 @@ enum BrandIcons {
             NSGraphicsContext.current?.saveGraphicsState()
             defer { NSGraphicsContext.current?.restoreGraphicsState() }
             let center = NSPoint(x: rect.midX, y: rect.midY)
-            NSAffineTransform(translationByX: center.x, byY: center.y).concat()
-            NSAffineTransform(rotationByDegrees: angle * 180 / .pi).concat()
-            NSAffineTransform(translationByX: -center.x, byY: -center.y).concat()
+            let transform = NSAffineTransform()
+            transform.translateX(by: center.x, yBy: center.y)
+            transform.rotate(byDegrees: angle * 180 / .pi)
+            transform.translateX(by: -center.x, yBy: -center.y)
+            transform.concat()
             base.draw(in: rect)
             return true
         }
