@@ -2,7 +2,48 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
-## [Unreleased]
+## [0.3.0] - 2026-07-15
+
+### Added
+
+- Show estimated cost of today's tokens per provider, priced at API list
+  prices per model and shown in both THB and USD (exchange rate configurable
+  in Settings).
+- Diagnostics log (API calls, keychain reads, errors) with a viewer in
+  Settings; stored at `~/Library/Logs/AIUsageBar/`.
+- Live countdown ring in the dropdown showing seconds until the next refresh.
+- Show the app version in the dropdown menu.
+- Settings toggles for which Claude windows (5-hour / weekly) drive the
+  menu-bar percentage.
+- Surface usage-API failures in the dropdown with the cause (HTTP status /
+  error) and the age of the cached data still on display.
+- Persist the last good Claude limits across relaunches, so the dropdown shows
+  cached data (with its age) instead of nothing while the first fetch runs or
+  is rate limited.
+
+### Changed
+
+- Wider dropdown (300 → 380) with token stats paired two per row, roughly
+  halving the menu height.
+- Wider Settings window with the menu-bar options grouped on one row.
+- Honor the usage API's `Retry-After` on 429: nothing refetches before the
+  server-given time — not the timer, not ⌘R, not a relaunch (the penalty
+  window persists to disk) — and the dropdown shows a retry countdown.
+
+### Fixed
+
+- Parse fractional-second `resets_at` timestamps so Claude "resets in" no
+  longer shows "—".
+- Cache the Claude access token in memory: the keychain is read once per
+  launch (and again only after a 401) instead of on every limits poll,
+  cutting password prompts dramatically.
+- Never start a second limits fetch while one is blocked on the keychain
+  dialog — previously each 60s tick stacked another password prompt.
+- Periodic refresh keeps firing while the dropdown is open (timer moved to
+  `.common` run-loop mode).
+- `make-app.sh` accepts `CODESIGN_IDENTITY` (and auto-detects a local
+  "AIUsageBar Signing" certificate) so builds signed with a stable identity
+  keep the keychain "Always Allow" grant across updates.
 
 ## [0.2.1] - 2026-07-15
 

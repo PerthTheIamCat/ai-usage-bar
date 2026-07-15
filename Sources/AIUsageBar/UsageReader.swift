@@ -130,6 +130,13 @@ enum UsageReader {
             usage.outputTokens += e.output
             usage.cacheCreationTokens += e.cacheW
             usage.cacheReadTokens += e.cacheR
+            let model = e.model ?? "unknown"
+            var m = usage.perModel[model] ?? ModelTokens()
+            m.input += e.input
+            m.output += e.output
+            m.cacheWrite += e.cacheW
+            m.cacheRead += e.cacheR
+            usage.perModel[model] = m
             if e.ts > latestTS, let m = e.model {
                 latestTS = e.ts
                 usage.lastModel = m

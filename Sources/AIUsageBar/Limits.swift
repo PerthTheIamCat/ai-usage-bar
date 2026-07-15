@@ -9,10 +9,11 @@ struct LimitWindow {
 }
 
 struct ClaudeLimits {
-    enum State { case ok, stale, notLoggedIn, rateLimited, error(String) }
+    enum State { case ok, stale, notLoggedIn, rateLimited(retryAfter: TimeInterval?), error(String) }
     var state: State = .error("unknown")
     var fiveHour: LimitWindow?
     var sevenDay: LimitWindow?
+    var fetchedAt: Date?
 }
 
 struct CodexLimits {

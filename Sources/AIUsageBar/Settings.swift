@@ -37,6 +37,9 @@ final class AppSettings: ObservableObject {
     private enum Keys {
         static let displayMode = "displayMode"
         static let warnBelowRemaining = "warnBelowRemaining"
+        static let showFiveHourInMenuBar = "showFiveHourInMenuBar"
+        static let showWeeklyInMenuBar = "showWeeklyInMenuBar"
+        static let thbPerUSD = "thbPerUSD"
     }
 
     @Published var displayMode: UsageDisplayMode {
@@ -55,10 +58,38 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Which Claude windows feed the menu-bar percentage. The dropdown menu
+    /// always shows both; these only affect the title in the menu bar.
+    @Published var showFiveHourInMenuBar: Bool {
+        didSet {
+            UserDefaults.standard.set(showFiveHourInMenuBar, forKey: Keys.showFiveHourInMenuBar)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var showWeeklyInMenuBar: Bool {
+        didSet {
+            UserDefaults.standard.set(showWeeklyInMenuBar, forKey: Keys.showWeeklyInMenuBar)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    /// Exchange rate for the estimated-cost rows (THB per 1 USD).
+    @Published var thbPerUSD: Double {
+        didSet {
+            UserDefaults.standard.set(thbPerUSD, forKey: Keys.thbPerUSD)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
     private init() {
         let d = UserDefaults.standard
         displayMode = UsageDisplayMode(rawValue: d.string(forKey: Keys.displayMode) ?? "") ?? .remaining
         let stored = d.double(forKey: Keys.warnBelowRemaining)
         warnBelowRemaining = stored > 0 ? stored : 20
+        showFiveHourInMenuBar = d.object(forKey: Keys.showFiveHourInMenuBar) as? Bool ?? true
+        showWeeklyInMenuBar = d.object(forKey: Keys.showWeeklyInMenuBar) as? Bool ?? true
+        let rate = d.double(forKey: Keys.thbPerUSD)
+        thbPerUSD = rate > 0 ? rate : 33
     }
 }

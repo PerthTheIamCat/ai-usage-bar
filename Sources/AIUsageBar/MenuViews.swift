@@ -3,9 +3,12 @@ import AppKit
 // Shared layout metrics for the custom menu rows so every row's text and bars
 // align to the same left/right edges regardless of row type.
 enum MenuMetrics {
-    static let width: CGFloat = 300
+    static let width: CGFloat = 380
     static let inset: CGFloat = 14
     static var contentWidth: CGFloat { width - inset * 2 }
+    /// Two-column stat layout: gap between the columns.
+    static let columnGap: CGFloat = 20
+    static var columnWidth: CGFloat { (contentWidth - columnGap) / 2 }
 }
 
 /// Traffic-light color for a remaining-capacity percentage. The red threshold
@@ -93,6 +96,32 @@ func noteItem(_ text: String) -> NSMenuItem {
     return viewItem(view, accessibilityLabel: text)
 }
 
+/// Two stat pairs side by side: `label value   label value`. Halves the menu
+/// height for short numeric stats. Pass nil for the right pair to leave it empty.
+func statPairItem(_ name1: String, _ value1: String, _ name2: String? = nil, _ value2: String? = nil) -> NSMenuItem {
+    let view = NSView(frame: NSRect(x: 0, y: 0, width: MenuMetrics.width, height: 21))
+    let col = MenuMetrics.columnWidth
+    let valueWidth: CGFloat = 64
+
+    func addPair(_ name: String, _ value: String, x: CGFloat) {
+        let l = label(name, font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
+        l.frame = NSRect(x: x, y: 2, width: col - valueWidth - 4, height: 17)
+        let v = label(value, font: .monospacedDigitSystemFont(ofSize: 13, weight: .medium),
+                      color: .labelColor, alignment: .right)
+        v.frame = NSRect(x: x + col - valueWidth, y: 2, width: valueWidth, height: 17)
+        view.addSubview(l)
+        view.addSubview(v)
+    }
+
+    addPair(name1, value1, x: MenuMetrics.inset)
+    var ax = "\(name1): \(value1)"
+    if let name2, let value2 {
+        addPair(name2, value2, x: MenuMetrics.inset + col + MenuMetrics.columnGap)
+        ax += ", \(name2): \(value2)"
+    }
+    return viewItem(view, accessibilityLabel: ax)
+}
+
 /// Two-column stat row: secondary label left, monospaced-digit value right.
 func statRowItem(_ name: String, _ value: String) -> NSMenuItem {
     let view = NSView(frame: NSRect(x: 0, y: 0, width: MenuMetrics.width, height: 21))
@@ -104,6 +133,103 @@ func statRowItem(_ name: String, _ value: String) -> NSMenuItem {
     view.addSubview(l)
     view.addSubview(v)
     return viewItem(view, accessibilityLabel: "\(name): \(value)")
+}
+
+/// "Updated 20:10" row with a live countdown ring to the next refresh.
+/// The ring drains clockwise and the label counts down in seconds; the timer
+/// runs in .common mode so it keeps ticking while the menu is open.
+final class RefreshCountdownView: NSView {
+    private let nextFire: Date
+    private let interval: TimeInterval
+    private let updatedText: String
+    private let label: NSTextField
+    private var timer: Timer?
+
+    private static let ringSize: CGFloat = 12
+
+    init(updatedAt: Date, nextFire: Date, interval: TimeInterval) {
+        self.nextFire = nextFire
+        self.interval = max(1, interval)
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        self.updatedText = "Updated \(fmt.string(from: updatedAt))"
+        self.label = NSTextField(labelWithString: "")
+        super.init(frame: NSRect(x: 0, y: 0, width: MenuMetrics.width, height: 20))
+        label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byTruncatingTail
+        label.frame = NSRect(
+            x: MenuMetrics.inset + Self.ringSize + 6, y: 3,
+            width: MenuMetrics.contentWidth - Self.ringSize - 6, height: 14)
+        addSubview(label)
+        updateLabel()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    deinit { timer?.invalidate() }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        timer?.invalidate()
+        timer = nil
+        guard window != nil else { return }
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.updateLabel()
+            self?.needsDisplay = true
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    private var remaining: TimeInterval { max(0, nextFire.timeIntervalSinceNow) }
+
+    private func updateLabel() {
+        // The open menu keeps this (stale) view after a refresh rebuilds the
+        // menu, so past-zero means the refresh already fired behind it.
+        label.stringValue = remaining <= 0
+            ? "\(updatedText) · refreshing…"
+            : "\(updatedText) · refresh in \(Int(remaining.rounded()))s"
+        setAccessibilityLabel(label.stringValue)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let size = Self.ringSize
+        let rect = NSRect(x: MenuMetrics.inset, y: (bounds.height - size) / 2, width: size, height: size)
+            .insetBy(dx: 1, dy: 1)
+        let center = NSPoint(x: rect.midX, y: rect.midY)
+        let radius = rect.width / 2
+
+        let track = NSBezierPath(ovalIn: rect)
+        track.lineWidth = 2
+        NSColor.quaternaryLabelColor.setStroke()
+        track.stroke()
+
+        let fraction = CGFloat(remaining / interval)
+        guard fraction > 0 else { return }
+        // Ring drains as the countdown approaches zero: green → orange → red.
+        let color: NSColor = fraction > 0.5 ? .systemGreen : (fraction > 0.2 ? .systemOrange : .systemRed)
+        let arc = NSBezierPath()
+        // NSBezierPath angles are counter-clockwise; sweep backwards from 12
+        // o'clock so the ring visually drains clockwise.
+        arc.appendArc(withCenter: center, radius: radius,
+                      startAngle: 90, endAngle: 90 - fraction * 360, clockwise: true)
+        arc.lineWidth = 2
+        arc.lineCapStyle = .round
+        color.setStroke()
+        arc.stroke()
+    }
+}
+
+func refreshCountdownItem(updatedAt: Date, nextFire: Date, interval: TimeInterval) -> NSMenuItem {
+    let view = RefreshCountdownView(updatedAt: updatedAt, nextFire: nextFire, interval: interval)
+    view.setAccessibilityElement(true)
+    view.setAccessibilityRole(.staticText)
+    let item = NSMenuItem()
+    item.view = view
+    item.isEnabled = false
+    return item
 }
 
 /// Limit window row: name + colored remaining %, capsule meter, reset caption.

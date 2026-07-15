@@ -2,8 +2,19 @@
 # Build AIUsageBar.app bundle from the Swift package.
 set -e
 cd "$(dirname "$0")"
-VERSION="${VERSION:-0.2.1}"
-BUILD_NUMBER="${BUILD_NUMBER:-3}"
+VERSION="${VERSION:-0.3.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-4}"
+# Ad-hoc signatures ("-") change on every build, which makes macOS forget the
+# keychain "Always Allow" grant and re-prompt for the login password. Default
+# to the local "AIUsageBar Signing" self-signed cert when it exists so the
+# grant survives across builds; override with CODESIGN_IDENTITY.
+if [[ -z "${CODESIGN_IDENTITY:-}" ]]; then
+  if security find-identity -v -p codesigning 2>/dev/null | grep -q "AIUsageBar Signing"; then
+    CODESIGN_IDENTITY="AIUsageBar Signing"
+  else
+    CODESIGN_IDENTITY="-"
+  fi
+fi
 swift build -c release
 APP=AIUsageBar.app
 rm -rf "$APP"
@@ -48,8 +59,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$SPARKLE_APP_FRAMEWORK/Versions/B/Autoupdate"
-codesign --force --sign - "$SPARKLE_APP_FRAMEWORK/Versions/B/Updater.app"
-codesign --force --sign - "$SPARKLE_APP_FRAMEWORK"
-codesign --force --sign - "$APP"
+codesign --force --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK/Versions/B/Autoupdate"
+codesign --force --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK/Versions/B/Updater.app"
+codesign --force --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK"
+codesign --force --sign "$CODESIGN_IDENTITY" "$APP"
 echo "Built $PWD/$APP"

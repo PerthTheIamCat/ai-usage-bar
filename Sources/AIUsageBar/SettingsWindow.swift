@@ -6,6 +6,7 @@ struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginItemError: String?
+    @State private var logText = ""
 
     var body: some View {
         Form {
@@ -14,7 +15,27 @@ struct SettingsView: View {
                     Text("Remaining — “84% left”").tag(UsageDisplayMode.remaining)
                     Text("Used — “16% used”").tag(UsageDisplayMode.used)
                 }
-                .pickerStyle(.radioGroup)
+                .pickerStyle(.segmented)
+            }
+
+            Section {
+                LabeledContent("Claude windows") {
+                    HStack(spacing: 16) {
+                        Toggle("5-hour", isOn: $settings.showFiveHourInMenuBar)
+                        Toggle("Weekly", isOn: $settings.showWeeklyInMenuBar)
+                    }
+                }
+                LabeledContent("THB per USD") {
+                    TextField("33", value: $settings.thbPerUSD, format: .number.precision(.fractionLength(0...2)))
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                }
+            } header: {
+                Text("Menu bar")
+            } footer: {
+                Text("The menu bar shows the tightest of the selected Claude windows (token total when both are off); the dropdown always shows both. Cost rows price today's tokens at API list prices, converted to baht at this rate.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -58,9 +79,43 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
             }
+
+            Section {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        Text(logText.isEmpty ? "No log entries yet." : logText)
+                            .font(.system(size: 10, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id("logEnd")
+                    }
+                    .frame(height: 170)
+                    .onAppear {
+                        logText = AppLog.shared.tail()
+                        proxy.scrollTo("logEnd", anchor: .bottom)
+                    }
+                }
+                HStack {
+                    Button("Refresh") { logText = AppLog.shared.tail() }
+                    Button("Open Log File") {
+                        NSWorkspace.shared.activateFileViewerSelecting([AppLog.shared.fileURL])
+                    }
+                    Spacer()
+                    Button("Clear", role: .destructive) {
+                        AppLog.shared.clear()
+                        logText = AppLog.shared.tail()
+                    }
+                }
+            } header: {
+                Text("Log")
+            } footer: {
+                Text("API calls, keychain reads, and errors. Stored at ~/Library/Logs/AIUsageBar/.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        .frame(width: 560)
         .fixedSize()
     }
 }

@@ -1,5 +1,13 @@
 import Foundation
 
+/// Token counts for a single model, used for per-model cost pricing.
+struct ModelTokens {
+    var input = 0
+    var output = 0
+    var cacheWrite = 0
+    var cacheRead = 0
+}
+
 struct ClaudeUsage {
     var inputTokens = 0
     var outputTokens = 0
@@ -7,6 +15,8 @@ struct ClaudeUsage {
     var cacheReadTokens = 0
     var sessionCount = 0
     var lastModel: String?
+    /// Per-model breakdown of the same totals; keyed by model ID.
+    var perModel: [String: ModelTokens] = [:]
 
     var total: Int { inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens }
 }
