@@ -2,6 +2,16 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.4.0] - 2026-07-15
+
+### Added
+
+- Antigravity local prompt usage tracking and cost analytics:
+  - Detects Antigravity CLI history files under `~/.gemini/antigravity-cli`.
+  - Tracks today's prompts and session counts.
+  - Computes estimated cost using Gemini 3.5 Flash list prices (assuming 1.5K input / 800 output tokens per prompt).
+  - Displays Gemini brand icon/color in the status bar and dropdown.
+
 ## [0.3.1] - 2026-07-15
 
 ### Fixed
