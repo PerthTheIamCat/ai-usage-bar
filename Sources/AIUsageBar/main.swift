@@ -221,6 +221,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 parts.append((BrandIcons.codex, formatTokens(x.totalTokens), false))
             }
         }
+        if let g = snap.antigravity {
+            parts.append((BrandIcons.gemini, "\(g.totalPrompts)P", false))
+        }
         if let button = statusItem.button {
             let font = NSFont.monospacedDigitSystemFont(
                 ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
@@ -278,9 +281,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
         }
 
-        if snap.claude == nil && snap.codex == nil {
+        if let g = snap.antigravity {
+            menu.addItem(headerItem("Antigravity", icon: BrandIcons.gemini, iconTint: BrandIcons.geminiBrandColor))
+            menu.addItem(caption("Today's activity"))
+            menu.addItem(statPairItem("Prompts", "\(g.totalPrompts)", "Sessions", "\(g.sessionCount)"))
+            let usd = Pricing.antigravityCostUSD(g)
+            menu.addItem(row("Est. cost", "\(formatTHB(usd)) · \(formatUSD(usd))"))
+            menu.addItem(.separator())
+        }
+
+        if snap.claude == nil && snap.codex == nil && snap.antigravity == nil {
             menu.addItem(header("No AI CLI detected"))
-            menu.addItem(note("Looked for ~/.claude and ~/.codex"))
+            menu.addItem(note("Looked for ~/.claude, ~/.codex and ~/.gemini"))
             menu.addItem(.separator())
         }
 

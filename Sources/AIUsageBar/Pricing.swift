@@ -43,6 +43,20 @@ enum Pricing {
     /// models, so all Codex usage is priced at the gpt-5 rate.
     static let codexRates = (input: 1.25, cachedInput: 0.125, output: 10.0)
 
+    /// Gemini list prices (USD/MTok) for Gemini 3.5 Flash and Pro
+    static let geminiFlashRates = TokenRates(input: 0.075, output: 0.3)
+    static let geminiProRates = TokenRates(input: 1.25, output: 5.0)
+
+    /// ChatGPT/GPT-4o list prices (USD/MTok)
+    static let gpt4oRates = TokenRates(input: 2.5, output: 10.0)
+
+    /// Price Antigravity usage (we assume average prompt is 1.5K input, 800 output tokens on Gemini 3.5 Flash)
+    static func antigravityCostUSD(_ usage: AntigravityUsage) -> Double {
+        let inputTokens = usage.totalPrompts * 1500
+        let outputTokens = usage.totalPrompts * 800
+        return (Double(inputTokens) * geminiFlashRates.input + Double(outputTokens) * geminiFlashRates.output) / 1_000_000
+    }
+
     static func claudeRates(model: String) -> TokenRates {
         for entry in claudeRates where model.hasPrefix(entry.prefix) {
             return entry.rates
