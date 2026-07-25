@@ -2,8 +2,14 @@
 # Build AIUsageBar.app bundle from the Swift package.
 set -e
 cd "$(dirname "$0")"
-VERSION="${VERSION:-0.4.0}"
-BUILD_NUMBER="${BUILD_NUMBER:-6}"
+# Defaults to the latest git tag rather than a fixed string — a hardcoded
+# fallback here silently goes stale the moment it's forgotten about (as
+# happened: this sat at "0.4.0" through several later releases, so every
+# ad-hoc local build kept reporting an old version regardless of what was
+# actually built).
+VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}"
+VERSION="${VERSION:-0.0.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
 # Ad-hoc signatures ("-") change on every build, which makes macOS forget the
 # keychain "Always Allow" grant and re-prompt for the login password. Default
 # to the local "AIUsageBar Signing" self-signed cert when it exists so the
@@ -29,6 +35,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resourc
 cp .build/release/AIUsageBar "$APP/Contents/MacOS/AIUsageBar"
 cp -R "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp CHANGELOG.md "$APP/Contents/Resources/CHANGELOG.md"
 # SwiftPM links Sparkle through @rpath but does not add the app-bundle framework
 # location. Add it before signing so launchd and Finder can load the copy above.
 install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/AIUsageBar"

@@ -16,6 +16,8 @@ struct SettingsView: View {
                 .tabItem { Label("Cost", systemImage: "dollarsign.circle") }
             LogTab()
                 .tabItem { Label("Log", systemImage: "doc.text") }
+            ChangelogTab()
+                .tabItem { Label("Changelog", systemImage: "clock.arrow.circlepath") }
         }
         .frame(width: 560, height: 440)
     }
@@ -102,7 +104,7 @@ private struct ProvidersTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Order").font(.headline)
-            Text("Drag to reorder. Applies to both the status-bar segment order and the dropdown section order.")
+            Text("Drag to reorder — applies to both the status-bar segment order and the popover's sidebar order. Click the eye to hide a provider from the status bar specifically; it still stays in the popover.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -134,8 +136,10 @@ private struct ProvidersTab: View {
 
 private struct ProviderRow: View {
     let kind: ProviderKind
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
+        let shown = settings.isShownInMenuBar(kind)
         HStack(spacing: 10) {
             Image(nsImage: kind.icon)
                 .renderingMode(.template)
@@ -143,6 +147,14 @@ private struct ProviderRow: View {
                 .frame(width: 15, height: 15)
             Text(kind.displayName)
             Spacer()
+            Button {
+                settings.setShownInMenuBar(kind, !shown)
+            } label: {
+                Image(systemName: shown ? "eye" : "eye.slash")
+                    .foregroundStyle(shown ? Color.primary : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(shown ? "Showing in menu bar — click to hide" : "Hidden from menu bar — click to show")
             Image(systemName: "line.3.horizontal")
                 .foregroundStyle(.tertiary)
         }
@@ -236,6 +248,92 @@ private struct LogTab: View {
                 .foregroundStyle(.secondary)
         }
         .padding(20)
+    }
+}
+
+private enum ChangelogLine {
+    case version(String)
+    case section(String)
+    case bullet(String)
+    case text(String)
+    case blank
+}
+
+/// Minimal line-based parser for this repo's CHANGELOG.md shape — `## `
+/// version headings, `### ` section headings (Added/Fixed/Changed), `- `
+/// bullets with two-space-indented wrapped continuations, blank lines as
+/// spacing. Not a general Markdown renderer; SwiftUI's `Text` markdown
+/// support doesn't style block-level headings the way this needs.
+private func parseChangelog(_ raw: String) -> [ChangelogLine] {
+    var result: [ChangelogLine] = []
+    for rawLine in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+        let line = String(rawLine)
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if line.hasPrefix("## ") {
+            result.append(.version(String(line.dropFirst(3))))
+        } else if line.hasPrefix("### ") {
+            result.append(.section(String(line.dropFirst(4))))
+        } else if line.hasPrefix("- ") {
+            result.append(.bullet(String(line.dropFirst(2))))
+        } else if line.hasPrefix("# ") {
+            continue // skip the top-level "# Changelog" title; the tab already has one
+        } else if trimmed.isEmpty {
+            result.append(.blank)
+        } else if line.hasPrefix("  "), case .bullet(let prev)? = result.last {
+            result[result.count - 1] = .bullet(prev + " " + trimmed)
+        } else {
+            result.append(.text(trimmed))
+        }
+    }
+    return result
+}
+
+private struct ChangelogTab: View {
+    @State private var lines: [ChangelogLine] = []
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    switch line {
+                    case .version(let v):
+                        Text(v)
+                            .font(.system(size: 14, weight: .bold))
+                            .padding(.top, 10)
+                    case .section(let s):
+                        Text(s)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                    case .bullet(let b):
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•").foregroundStyle(.secondary)
+                            Text(b).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.system(size: 12))
+                    case .text(let t):
+                        Text(t)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    case .blank:
+                        Color.clear.frame(height: 2)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+        }
+        .onAppear(perform: load)
+    }
+
+    private func load() {
+        guard let url = Bundle.main.url(forResource: "CHANGELOG", withExtension: "md"),
+              let text = try? String(contentsOf: url, encoding: .utf8)
+        else {
+            lines = [.text("Changelog not found in this build.")]
+            return
+        }
+        lines = parseChangelog(text)
     }
 }
 

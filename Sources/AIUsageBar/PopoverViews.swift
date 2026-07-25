@@ -477,18 +477,19 @@ struct PopoverFooter: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 14) {
+            HStack(spacing: 8) {
                 Button("Refresh Now", action: onRefresh)
                 Button("Check for Updates…", action: onCheckForUpdates)
                 Spacer()
             }
-            HStack(spacing: 14) {
+            HStack(spacing: 8) {
                 Button("Settings…", action: onSettings)
                 Spacer()
                 Button("Quit", action: onQuit)
             }
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
         .font(.system(size: 12))
         .padding(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
     }

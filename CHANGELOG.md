@@ -2,6 +2,29 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.6.1] - 2026-07-25
+
+### Added
+
+- Per-provider "show in menu bar" toggle in Settings › Providers (the eye
+  icon on each row) — independent of drag order, and independent of the
+  popover, so a provider can stay reachable via the popover's sidebar while
+  being hidden from the compact status-bar title.
+- Changelog tab in Settings, reading this file bundled into the app.
+
+### Fixed
+
+- Popover was sizing itself to the full (unclipped) height of its ScrollView
+  content instead of the intended fixed 480pt — NSHostingController's
+  automatic content-size tracking doesn't play well with a ScrollView inside
+  a fixed frame. Popover size is now pinned explicitly.
+- Footer buttons (Refresh Now, Check for Updates, Settings, Quit) were
+  `.borderless` — flat text with no visible button chrome. Now `.bordered`.
+- `make-app.sh` had a hardcoded local-build version fallback (`0.4.0`) that
+  never got updated across several later releases, so any ad-hoc local
+  build reported a stale version regardless of what was actually built.
+  It now defaults to the latest git tag instead.
+
 ## [0.6.0] - 2026-07-24
 
 ### Changed

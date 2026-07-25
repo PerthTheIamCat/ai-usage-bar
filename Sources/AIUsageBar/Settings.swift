@@ -74,6 +74,7 @@ final class AppSettings: ObservableObject {
         static let showAvgPerSession = "showAvgPerSession"
         static let showPeriodCost = "showPeriodCost"
         static let showSkillsUsed = "showSkillsUsed"
+        static let menuBarHiddenProviders = "menuBarHiddenProviders"
     }
 
     @Published var displayMode: UsageDisplayMode {
@@ -153,6 +154,23 @@ final class AppSettings: ObservableObject {
         providerOrder.move(fromOffsets: fromOffsets, toOffset: toOffset)
     }
 
+    /// Providers excluded from the compact status-bar title, independent of
+    /// `providerOrder` (which still governs their order everywhere they do
+    /// appear, including the popover's sidebar — this only hides the
+    /// menu-bar segment).
+    @Published var menuBarHiddenProviders: Set<ProviderKind> {
+        didSet {
+            UserDefaults.standard.set(menuBarHiddenProviders.map(\.rawValue), forKey: Keys.menuBarHiddenProviders)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    func isShownInMenuBar(_ kind: ProviderKind) -> Bool { !menuBarHiddenProviders.contains(kind) }
+
+    func setShownInMenuBar(_ kind: ProviderKind, _ shown: Bool) {
+        if shown { menuBarHiddenProviders.remove(kind) } else { menuBarHiddenProviders.insert(kind) }
+    }
+
     // MARK: - Optional dropdown rows
     // The core rows (limit windows, today's tokens, Est. cost) always show;
     // these extras can be hidden individually to cut clutter.
@@ -215,5 +233,8 @@ final class AppSettings: ObservableObject {
         showAvgPerSession = d.object(forKey: Keys.showAvgPerSession) as? Bool ?? true
         showPeriodCost = d.object(forKey: Keys.showPeriodCost) as? Bool ?? true
         showSkillsUsed = d.object(forKey: Keys.showSkillsUsed) as? Bool ?? true
+
+        let hiddenRaw = (d.array(forKey: Keys.menuBarHiddenProviders) as? [String]) ?? []
+        menuBarHiddenProviders = Set(hiddenRaw.compactMap(ProviderKind.init(rawValue:)))
     }
 }

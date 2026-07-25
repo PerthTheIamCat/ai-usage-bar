@@ -123,9 +123,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onSettings: { [weak self] in self?.settingsClicked() },
             onQuit: { [weak self] in self?.quitClicked() }
         )
+        // NSHostingController's automatic content-size tracking miscalculates
+        // when a ScrollView is inside: it reports the ScrollView's full
+        // unclipped content height as the "ideal" size instead of respecting
+        // PopoverContentView's own fixed .frame(height: 480), which made the
+        // popover balloon to fit everything and render past its own bounds.
+        // Disable that tracking and pin the size ourselves to match the
+        // sidebar (130) + divider (~1) + content (380) layout exactly.
+        let hosting = NSHostingController(rootView: content)
+        hosting.sizingOptions = []
         let pop = NSPopover()
         pop.behavior = .transient
-        pop.contentViewController = NSHostingController(rootView: content)
+        pop.contentSize = NSSize(width: 511, height: 480)
+        pop.contentViewController = hosting
         return pop
     }
 
@@ -294,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Status bar title (unrelated to the popover; unchanged)
 
     private func statusBarPart(for kind: ProviderKind, _ snap: UsageSnapshot) -> (icon: NSImage, text: String, warning: Bool)? {
+        guard AppSettings.shared.isShownInMenuBar(kind) else { return nil }
         let warnBelow = AppSettings.shared.warnBelowRemaining
         switch kind {
         case .claude:
