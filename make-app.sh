@@ -62,7 +62,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>SUFeedURL</key><string>https://perththeiamcat.github.io/ai-usage-bar/appcast.xml</string>
     <key>SUPublicEDKey</key><string>GZz3+3QtNsOQQuZ0OdbFyFuua1WkN3uWj11cx/WGkSc=</string>
     <key>SUEnableAutomaticChecks</key><true/>
-    <key>SUAutomaticallyUpdate</key><true/>
+    <key>SUAutomaticallyUpdate</key><false/>
     <key>SURequireSignedFeed</key><true/>
     <key>SUVerifyUpdateBeforeExtraction</key><true/>
 </dict>

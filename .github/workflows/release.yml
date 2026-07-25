@@ -40,8 +40,7 @@ jobs:
             "AIUsageBar-v${version}-macos-arm64.zip"
             "AIUsageBar-v${version}-macos-arm64.zip.sha256"
           )
-          notes_file="$(mktemp)"
-          trap 'rm -f "$notes_file"' EXIT
+          notes_file="release-notes.md"
 
           awk -v heading="## [$version]" '
             index($0, heading) == 1 { in_section = 1; next }
@@ -87,12 +86,14 @@ jobs:
           mkdir -p "$site"
           curl --fail --silent --show-error "$feed_url" -o "$site/appcast.xml" || true
           cp "$archive" "$site/"
+          cp release-notes.md "$site/${archive%.zip}.md"
 
           printf '%s' "$SPARKLE_PRIVATE_KEY" | \
             .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
               --ed-key-file - \
               --download-url-prefix "$download_prefix" \
               --full-release-notes-url "https://github.com/PerthTheIamCat/ai-usage-bar/releases/tag/${TAG_NAME}" \
+              --embed-release-notes \
               --link "https://github.com/PerthTheIamCat/ai-usage-bar" \
               --maximum-versions 1 \
               -o "$site/appcast.xml" \
@@ -104,7 +105,7 @@ jobs:
               --disable-signing-warning \
               "$site/appcast.xml"
 
-          rm "$site/$archive"
+          rm "$site/$archive" "$site/${archive%.zip}.md"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

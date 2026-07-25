@@ -4,6 +4,14 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Updates now ask before installing instead of installing silently in the
+  background, so the "what's new" dialog with this release's notes actually
+  shows up before you update. The release pipeline also embeds the matching
+  CHANGELOG section directly in the update feed instead of only linking out
+  to the GitHub release page.
+
 ### Added
 
 - Skills used today now tracks last-used time per skill, not just a count
