@@ -26,6 +26,18 @@ All notable changes to AI Usage Bar are documented in this file.
   GitHub-contributions-style grid over the last 30 days, reusing the same
   trend data already fetched for the trend chart.
 
+### Fixed
+
+- Hourly chart's per-provider legend and both charts' axis labels were
+  rendering garbled/missing. Cause: a detached `NSTextField` had `.frame`
+  set but was never added as a subview, so nothing established a
+  coordinate offset for it — calling `.draw(text.bounds)` on it directly
+  ignored `frame.origin` entirely and drew every label piled up at the
+  parent view's origin instead of its intended position. Replaced with
+  direct `NSString.draw(in:withAttributes:)`, which honors the given rect
+  correctly (same technique the "No usage recorded" placeholder already
+  used, just not consistently).
+
 ## [0.7.0] - 2026-07-25
 
 ### Added

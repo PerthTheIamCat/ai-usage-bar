@@ -111,13 +111,27 @@ enum MiniMeter {
     }
 }
 
-private func label(_ text: String, font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) -> NSTextField {
-    let l = NSTextField(labelWithString: text)
-    l.font = font
-    l.textColor = color
-    l.alignment = alignment
-    l.lineBreakMode = .byTruncatingTail
-    return l
+/// Draws `text` directly into the current graphics context at `rect` — the
+/// reliable way to position text inside a custom NSView's `draw(_:)`.
+///
+/// (A previous version of this file built a detached `NSTextField`, set its
+/// `.frame`, then called `.draw(text.bounds)` on it directly. Since that
+/// field was never added as a subview, nothing ever established a
+/// coordinate offset for its `frame.origin` — `bounds` is always
+/// `(0, 0, width, height)` regardless of `frame`, so every label drawn that
+/// way rendered piled up at the parent view's origin instead of where it
+/// was supposed to go. This showed up as missing chart-legend text and
+/// garbled overlapping text where the hour-axis labels should have been.)
+private func drawText(_ text: String, in rect: NSRect, font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = alignment
+    paragraph.lineBreakMode = .byTruncatingTail
+    let attrs: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: color,
+        .paragraphStyle: paragraph
+    ]
+    (text as NSString).draw(in: rect, withAttributes: attrs)
 }
 
 /// "Updated 20:10" row with a live countdown ring to the next refresh.
@@ -241,13 +255,8 @@ final class HourlyUsageChartView: NSView {
         }
 
         guard usage.total > 0 else {
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.secondaryLabelColor
-            ]
-            ("No usage recorded today" as NSString).draw(
-                in: NSRect(x: chart.minX, y: chart.midY - 8, width: chart.width, height: 16),
-                withAttributes: attrs)
+            drawText("No usage recorded today", in: NSRect(x: chart.minX, y: chart.midY - 8, width: chart.width, height: 16),
+                     font: .systemFont(ofSize: 11), color: .secondaryLabelColor, alignment: .center)
             return
         }
 
@@ -280,9 +289,9 @@ final class HourlyUsageChartView: NSView {
         drawSeries(usage.antigravity, color: ProviderColor.antigravity)
 
         for index in [0, 6, 12, 18, 23] {
-            let text = label(String(format: "%02d", index), font: .monospacedDigitSystemFont(ofSize: 9, weight: .regular), color: .secondaryLabelColor, alignment: .center)
-            text.frame = NSRect(x: chart.minX + CGFloat(index) * step - 12, y: chart.minY - 15, width: 24, height: 12)
-            text.draw(text.bounds)
+            let rect = NSRect(x: chart.minX + CGFloat(index) * step - 12, y: chart.minY - 15, width: 24, height: 12)
+            drawText(String(format: "%02d", index), in: rect,
+                     font: .monospacedDigitSystemFont(ofSize: 9, weight: .regular), color: .secondaryLabelColor, alignment: .center)
         }
 
         var legendX = chart.minX
@@ -292,9 +301,8 @@ final class HourlyUsageChartView: NSView {
             color.setFill()
             dot.fill()
             let textWidth: CGFloat = name == "Antigravity" ? 64 : 42
-            let text = label(name, font: .systemFont(ofSize: 9), color: .secondaryLabelColor)
-            text.frame = NSRect(x: legendX + 10, y: legendY - 3, width: textWidth, height: 12)
-            text.draw(text.bounds)
+            drawText(name, in: NSRect(x: legendX + 10, y: legendY - 3, width: textWidth, height: 12),
+                     font: .systemFont(ofSize: 9), color: .secondaryLabelColor)
             legendX += 10 + textWidth
         }
     }
@@ -336,13 +344,8 @@ final class DailyTrendChartView: NSView {
 
         let totals = trend.totalCostUSD
         guard totals.reduce(0, +) > 0 else {
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.secondaryLabelColor
-            ]
-            ("No cost recorded in this range" as NSString).draw(
-                in: NSRect(x: chart.minX, y: chart.midY - 8, width: chart.width, height: 16),
-                withAttributes: attrs)
+            drawText("No cost recorded in this range", in: NSRect(x: chart.minX, y: chart.midY - 8, width: chart.width, height: 16),
+                     font: .systemFont(ofSize: 11), color: .secondaryLabelColor, alignment: .center)
             return
         }
         let maxValue = max(0.01, totals.max() ?? 0)
@@ -367,10 +370,9 @@ final class DailyTrendChartView: NSView {
         let fmt = DateFormatter()
         fmt.dateFormat = days > 10 ? "M/d" : "E"
         for i in Set([0, days / 2, days - 1]).sorted() {
-            let text = label(fmt.string(from: trend.days[i]), font: .systemFont(ofSize: 9), color: .secondaryLabelColor, alignment: .center)
             let x = chart.minX + CGFloat(i) * (barWidth + gap) + barWidth / 2 - 16
-            text.frame = NSRect(x: x, y: chart.minY - 15, width: 32, height: 12)
-            text.draw(text.bounds)
+            drawText(fmt.string(from: trend.days[i]), in: NSRect(x: x, y: chart.minY - 15, width: 32, height: 12),
+                     font: .systemFont(ofSize: 9), color: .secondaryLabelColor, alignment: .center)
         }
     }
 }
