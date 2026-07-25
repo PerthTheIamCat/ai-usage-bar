@@ -16,18 +16,6 @@ private struct LimitBarRepresentable: NSViewRepresentable {
     }
 }
 
-private struct LimitRingRepresentable: NSViewRepresentable {
-    let remainingPercent: Double
-    func makeNSView(context: Context) -> LimitRingView {
-        let v = LimitRingView()
-        v.remainingPercent = remainingPercent
-        return v
-    }
-    func updateNSView(_ nsView: LimitRingView, context: Context) {
-        nsView.remainingPercent = remainingPercent
-    }
-}
-
 private struct HourlyChartRepresentable: NSViewRepresentable {
     let usage: HourlyUsage
     func makeNSView(context: Context) -> HourlyUsageChartView { HourlyUsageChartView(usage: usage) }
@@ -41,6 +29,12 @@ private struct DailyTrendChartRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> DailyTrendChartView { DailyTrendChartView(trend: trend) }
     // Same story — call site uses `.id()` keyed on the range + day count.
     func updateNSView(_ nsView: DailyTrendChartView, context: Context) {}
+}
+
+private struct CalendarHeatmapRepresentable: NSViewRepresentable {
+    let trend: DailyTrend
+    func makeNSView(context: Context) -> CalendarHeatmapView { CalendarHeatmapView(trend: trend) }
+    func updateNSView(_ nsView: CalendarHeatmapView, context: Context) {}
 }
 
 private struct RefreshCountdownRepresentable: NSViewRepresentable {
@@ -134,67 +128,30 @@ struct PaneHeader: View {
     }
 }
 
+/// Always the capsule-bar layout — Settings › General › Limit style only
+/// affects the compact menu-bar title, not the popover (the popover has
+/// room to just always show the full bar + reset caption).
 struct LimitRow: View {
     let name: String
     let window: LimitWindow
-    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         let remaining = window.remainingPercent
-        let shownPercent = settings.displayMode == .used ? 100 - remaining : remaining
-
-        switch settings.limitStyle {
-        case .bar:
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(name).font(.system(size: 13, weight: .medium))
-                    Spacer()
-                    Text(settings.displayMode.rowText(remaining: remaining))
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(Color(nsColor: limitColor(remaining)))
-                }
-                LimitBarRepresentable(remainingPercent: remaining)
-                    .frame(height: 5)
-                Text("resets in \(humanReset(window.resetsAt))")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 2)
-
-        case .ring:
-            HStack(spacing: 10) {
-                ZStack {
-                    LimitRingRepresentable(remainingPercent: remaining)
-                        .frame(width: 36, height: 36)
-                    Text("\(Int(shownPercent.rounded()))")
-                        .font(.system(size: 10, weight: .bold).monospacedDigit())
-                        .foregroundStyle(Color(nsColor: limitColor(remaining)))
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name).font(.system(size: 13, weight: .medium))
-                    Text("resets in \(humanReset(window.resetsAt))")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 2)
-
-        case .percentOnly:
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(name).font(.system(size: 13, weight: .medium))
                 Spacer()
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(settings.displayMode.rowText(remaining: remaining))
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(Color(nsColor: limitColor(remaining)))
-                    Text("resets in \(humanReset(window.resetsAt))")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                }
+                Text(AppSettings.shared.displayMode.rowText(remaining: remaining))
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Color(nsColor: limitColor(remaining)))
             }
-            .padding(.vertical, 2)
+            LimitBarRepresentable(remainingPercent: remaining)
+                .frame(height: 5)
+            Text("resets in \(humanReset(window.resetsAt))")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
         }
+        .padding(.vertical, 2)
     }
 }
 
@@ -442,9 +399,39 @@ struct AnalyticsPane: View {
         return sliced
     }
 
+    /// nil when the alert is off, or spend hasn't reached 80% of budget yet.
+    private var budgetBanner: (text: String, isOver: Bool)? {
+        let s = AppSettings.shared
+        guard s.budgetEnabled, s.budgetAmountUSD > 0 else { return nil }
+        let spend: Double
+        let periodLabel: String
+        switch s.budgetPeriod {
+        case .day:
+            spend = (snap.claude.map(Pricing.claudeCostUSD) ?? 0)
+                + (snap.codex.map(Pricing.codexCostUSD) ?? 0)
+                + (snap.antigravity.map(Pricing.antigravityCostUSD) ?? 0)
+            periodLabel = "today"
+        case .month:
+            guard let pc = snap.periodCosts else { return nil }
+            spend = (pc.claudeUSD30 ?? 0) + (pc.codexUSD30 ?? 0) + (pc.antigravityUSD30 ?? 0)
+            periodLabel = "in the last 30 days"
+        }
+        let fraction = spend / s.budgetAmountUSD
+        guard fraction >= 0.8 else { return nil }
+        let verb = fraction >= 1 ? "Over budget" : "Near budget"
+        return ("\(verb) — \(formatUSD(spend)) of \(formatUSD(s.budgetAmountUSD)) \(periodLabel)", fraction >= 1)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
+                if let budget = budgetBanner {
+                    Text(budget.text)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(budget.isOver ? Color.red : Color.orange)
+                    Divider()
+                }
+
                 if !hasAnyProvider {
                     PaneHeader(title: "No AI CLI detected")
                     NoteText(text: "Looked for ~/.claude, ~/.codex and ~/.gemini")
@@ -481,6 +468,14 @@ struct AnalyticsPane: View {
                         .id(trendDays)
                 } else {
                     NoteText(text: "Still gathering trend data — check back in a bit.")
+                }
+
+                if let full = snap.dailyTrend {
+                    Divider().padding(.vertical, 4)
+                    PaneHeader(title: "Activity")
+                    CalendarHeatmapRepresentable(trend: full)
+                        .frame(height: 120)
+                        .id(full.days.count)
                 }
                 Spacer(minLength: 0)
             }
@@ -562,8 +557,11 @@ struct PopoverFooter: View {
     let appVersion: String
     let onRefresh: () -> Void
     let onCheckForUpdates: () -> Void
+    let onExportReport: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
+
+    @State private var justCopied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -583,6 +581,14 @@ struct PopoverFooter: View {
             HStack(spacing: 8) {
                 Button("Refresh Now", action: onRefresh)
                 Button("Check for Updates…", action: onCheckForUpdates)
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Button(justCopied ? "Copied!" : "Copy Usage Report") {
+                    onExportReport()
+                    justCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { justCopied = false }
+                }
                 Spacer()
             }
             HStack(spacing: 8) {
@@ -606,18 +612,21 @@ struct PopoverContentView: View {
     let appVersion: String
     let onRefresh: () -> Void
     let onCheckForUpdates: () -> Void
+    let onExportReport: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
     init(
         viewModel: UsageViewModel, appVersion: String,
         onRefresh: @escaping () -> Void, onCheckForUpdates: @escaping () -> Void,
+        onExportReport: @escaping () -> Void,
         onSettings: @escaping () -> Void, onQuit: @escaping () -> Void
     ) {
         self.viewModel = viewModel
         self.appVersion = appVersion
         self.onRefresh = onRefresh
         self.onCheckForUpdates = onCheckForUpdates
+        self.onExportReport = onExportReport
         self.onSettings = onSettings
         self.onQuit = onQuit
         _selection = State(initialValue: Self.initialSelection(for: viewModel.snapshot))
@@ -664,7 +673,7 @@ struct PopoverContentView: View {
                     }
                 }
                 .frame(maxHeight: .infinity)
-                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onSettings: onSettings, onQuit: onQuit)
+                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onSettings: onSettings, onQuit: onQuit)
             }
             .frame(width: 380)
         }

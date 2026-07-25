@@ -31,10 +31,11 @@ enum UsageDisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// How a limit window's remaining capacity is drawn in the popover.
+/// How a limit window's remaining capacity is drawn in the compact menu-bar
+/// title. The popover always shows the full bar meter regardless.
 enum LimitStyle: String, CaseIterable, Identifiable {
-    case bar        // horizontal capsule meter (original look)
-    case ring       // circular arc meter
+    case bar        // small inline capsule meter
+    case ring       // small inline circular arc meter
     case percentOnly // colored percentage text only, no meter graphic
 
     var id: String { rawValue }
@@ -44,6 +45,21 @@ enum LimitStyle: String, CaseIterable, Identifiable {
         case .bar: return "Bar"
         case .ring: return "Ring"
         case .percentOnly: return "Percent only"
+        }
+    }
+}
+
+/// Rolling window a budget alert is measured against. "Month" is a rolling
+/// 30 days (reuses the existing 30-day cost aggregate), not the calendar month.
+enum BudgetPeriod: String, CaseIterable, Identifiable {
+    case day, month
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .day: return "Per day"
+        case .month: return "Per 30 days"
         }
     }
 }
@@ -93,6 +109,10 @@ final class AppSettings: ObservableObject {
         static let showSkillsUsed = "showSkillsUsed"
         static let menuBarHiddenProviders = "menuBarHiddenProviders"
         static let limitStyle = "limitStyle"
+        static let budgetEnabled = "budgetEnabled"
+        static let budgetAmountUSD = "budgetAmountUSD"
+        static let budgetPeriod = "budgetPeriod"
+        static let notificationsEnabled = "notificationsEnabled"
     }
 
     @Published var displayMode: UsageDisplayMode {
@@ -189,10 +209,45 @@ final class AppSettings: ObservableObject {
         if shown { menuBarHiddenProviders.remove(kind) } else { menuBarHiddenProviders.insert(kind) }
     }
 
-    /// How limit windows are drawn in the popover — bar, ring, or plain text.
+    /// How limit windows are drawn in the menu bar — bar, ring, or plain text.
     @Published var limitStyle: LimitStyle {
         didSet {
             UserDefaults.standard.set(limitStyle.rawValue, forKey: Keys.limitStyle)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    // MARK: - Budget alert
+    // Warns (menu bar + a popover banner) once estimated spend crosses 80%
+    // of this amount for the selected rolling period.
+
+    @Published var budgetEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(budgetEnabled, forKey: Keys.budgetEnabled)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var budgetAmountUSD: Double {
+        didSet {
+            UserDefaults.standard.set(budgetAmountUSD, forKey: Keys.budgetAmountUSD)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var budgetPeriod: BudgetPeriod {
+        didSet {
+            UserDefaults.standard.set(budgetPeriod.rawValue, forKey: Keys.budgetPeriod)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    /// Native notification when a limit window drops below the warn
+    /// threshold or the budget alert goes over — still gated by the system
+    /// notification permission regardless of this being on.
+    @Published var notificationsEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(notificationsEnabled, forKey: Keys.notificationsEnabled)
             NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
         }
     }
@@ -264,5 +319,12 @@ final class AppSettings: ObservableObject {
         menuBarHiddenProviders = Set(hiddenRaw.compactMap(ProviderKind.init(rawValue:)))
 
         limitStyle = LimitStyle(rawValue: d.string(forKey: Keys.limitStyle) ?? "") ?? .bar
+
+        budgetEnabled = d.object(forKey: Keys.budgetEnabled) as? Bool ?? false
+        let storedBudget = d.double(forKey: Keys.budgetAmountUSD)
+        budgetAmountUSD = storedBudget > 0 ? storedBudget : 10
+        budgetPeriod = BudgetPeriod(rawValue: d.string(forKey: Keys.budgetPeriod) ?? "") ?? .day
+
+        notificationsEnabled = d.object(forKey: Keys.notificationsEnabled) as? Bool ?? true
     }
 }

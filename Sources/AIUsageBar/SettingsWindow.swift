@@ -36,7 +36,7 @@ private struct GeneralTab: View {
                     Text("Used — “16% used”").tag(UsageDisplayMode.used)
                 }
                 .pickerStyle(.segmented)
-                Picker("Limit style", selection: $settings.limitStyle) {
+                Picker("Menu bar style", selection: $settings.limitStyle) {
                     ForEach(LimitStyle.allCases) { style in
                         Text(style.displayName).tag(style)
                     }
@@ -45,7 +45,7 @@ private struct GeneralTab: View {
             } header: {
                 Text("Usage display")
             } footer: {
-                Text("How each limit window is drawn in the popover — a bar, a ring, or just the percentage.")
+                Text("How each provider's status is drawn in the menu bar — a mini bar, a ring, or just the percentage. The popover always shows the full bar meter.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -76,10 +76,11 @@ private struct GeneralTab: View {
                     Text("turns red at \(Int(settings.warnBelowRemaining))% remaining")
                         .foregroundStyle(.secondary)
                 }
+                Toggle("Send a notification when a window crosses it", isOn: $settings.notificationsEnabled)
             } header: {
                 Text("Low-limit warning")
             } footer: {
-                Text("The menu-bar percentage and meters turn red when a window's remaining capacity drops below this.")
+                Text("The menu-bar percentage and meters turn red when a window's remaining capacity drops below this. Notifications fire once per crossing (also covers the budget alert on the Cost tab) and still need macOS notification permission.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -214,6 +215,32 @@ private struct CostTab: View {
                 Text("Exchange rate")
             } footer: {
                 Text("Cost rows price today's tokens at API list prices, converted to baht at this rate. Auto-fetch pulls from api.frankfurter.app (ECB daily rates); turn it off to set a fixed rate by hand.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Enable budget alert", isOn: $settings.budgetEnabled)
+                if settings.budgetEnabled {
+                    LabeledContent("Amount") {
+                        HStack(spacing: 4) {
+                            Text("$")
+                            TextField("10", value: $settings.budgetAmountUSD, format: .number.precision(.fractionLength(0...2)))
+                                .frame(width: 70)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    Picker("Period", selection: $settings.budgetPeriod) {
+                        ForEach(BudgetPeriod.allCases) { period in
+                            Text(period.displayName).tag(period)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+            } header: {
+                Text("Budget alert")
+            } footer: {
+                Text("Warns in the menu bar and the popover once estimated spend crosses 80% of this amount for the period. \"Per 30 days\" is a rolling window, not the calendar month.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

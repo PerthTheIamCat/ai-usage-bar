@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appVersion: Self.appVersion,
             onRefresh: { [weak self] in self?.refreshClicked() },
             onCheckForUpdates: { [weak self] in self?.updaterController.checkForUpdates(nil) },
+            onExportReport: { [weak self] in self?.copyUsageReport() },
             onSettings: { [weak self] in self?.settingsClicked() },
             onQuit: { [weak self] in self?.quitClicked() }
         )
@@ -149,6 +150,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SettingsWindowController.shared.show()
     }
     @objc private func quitClicked() { NSApp.terminate(nil) }
+
+    private func copyUsageReport() {
+        let report = UsageReport.generate(viewModel.snapshot)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        appLog("exported usage report to clipboard")
+    }
 
     /// Cheap Date compare on every tick; the actual network call only fires
     /// once every ~6h (or never, if the user turned auto-fetch off).
@@ -302,39 +310,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.claudeAPIProblem = claudeAPIProblem
         viewModel.lastGoodClaudeFetchedAt = lastGoodClaude?.fetchedAt
         viewModel.nextRefreshAt = nextRefreshAt
+
+        UsageNotifier.shared.check(snap)
     }
 
-    // MARK: - Status bar title (unrelated to the popover; unchanged)
+    // MARK: - Status bar title
 
-    private func statusBarPart(for kind: ProviderKind, _ snap: UsageSnapshot) -> (icon: NSImage, text: String, warning: Bool)? {
+    /// `remainingPercent` is nil when the segment has no meaningful percent
+    /// to draw a meter from (e.g. Claude's "login"/"…"/"!" states, or a
+    /// token/prompt-count fallback) — those always render as text regardless
+    /// of Limit style.
+    private func statusBarPart(for kind: ProviderKind, _ snap: UsageSnapshot) -> (icon: NSImage, text: String, remainingPercent: Double?, warning: Bool)? {
         guard AppSettings.shared.isShownInMenuBar(kind) else { return nil }
         let warnBelow = AppSettings.shared.warnBelowRemaining
         switch kind {
         case .claude:
             guard snap.claude != nil else { return nil }
             let low = lowestClaudeRemaining(snap)
-            return (BrandIcons.claude, claudeTitleValue(snap), (low ?? 100) < warnBelow)
+            return (BrandIcons.claude, claudeTitleValue(snap), low, (low ?? 100) < warnBelow)
         case .codex:
             guard let x = snap.codex else { return nil }
-            if let v = codexTitleValue(snap) { return (BrandIcons.codex, v.text, v.remaining < warnBelow) }
-            return (BrandIcons.codex, formatTokens(x.totalTokens), false)
+            if let v = codexTitleValue(snap) { return (BrandIcons.codex, v.text, v.remaining, v.remaining < warnBelow) }
+            return (BrandIcons.codex, formatTokens(x.totalTokens), nil, false)
         case .antigravity:
             guard let g = snap.antigravity else { return nil }
             let windows = [g.fiveHour, g.weekly].compactMap { $0 }
             let icon = g.isWorking ? BrandIcons.rotated(BrandIcons.gemini, angle: animationPhase) : BrandIcons.gemini
             if let remaining = windows.map(\.remainingPercent).min() {
-                return (icon, AppSettings.shared.displayMode.shortText(remaining: remaining), remaining < warnBelow)
+                return (icon, AppSettings.shared.displayMode.shortText(remaining: remaining), remaining, remaining < warnBelow)
             }
-            return (icon, "\(g.totalPrompts)P", false)
+            return (icon, "\(g.totalPrompts)P", nil, false)
         }
     }
 
+    /// Combined estimated spend for the user's chosen budget period, nil
+    /// when the alert is off or there's not enough data yet (a "per 30 days"
+    /// budget needs the slow-cadence period-cost aggregate to have run once).
+    private func currentSpendUSD(_ snap: UsageSnapshot) -> Double? {
+        let s = AppSettings.shared
+        guard s.budgetEnabled, s.budgetAmountUSD > 0 else { return nil }
+        switch s.budgetPeriod {
+        case .day:
+            return (snap.claude.map(Pricing.claudeCostUSD) ?? 0)
+                + (snap.codex.map(Pricing.codexCostUSD) ?? 0)
+                + (snap.antigravity.map(Pricing.antigravityCostUSD) ?? 0)
+        case .month:
+            guard let pc = snap.periodCosts else { return nil }
+            return (pc.claudeUSD30 ?? 0) + (pc.codexUSD30 ?? 0) + (pc.antigravityUSD30 ?? 0)
+        }
+    }
+
+    /// Only appears once spend reaches 80% of budget — routine, well-under-
+    /// budget usage stays silent rather than adding a permanent segment.
+    private func budgetPart(_ snap: UsageSnapshot) -> (icon: NSImage, text: String, remainingPercent: Double?, warning: Bool)? {
+        guard let spend = currentSpendUSD(snap) else { return nil }
+        let budget = AppSettings.shared.budgetAmountUSD
+        let fraction = spend / budget
+        guard fraction >= 0.8 else { return nil }
+        let icon = NSImage(systemSymbolName: "dollarsign.circle.fill", accessibilityDescription: "Budget")
+            ?? NSImage(size: NSSize(width: 1, height: 1))
+        icon.isTemplate = true
+        return (icon, formatUSD(spend), nil, fraction >= 1.0)
+    }
+
     private func updateStatusBarTitle(_ snap: UsageSnapshot) {
-        let parts = AppSettings.shared.providerOrder.compactMap { statusBarPart(for: $0, snap) }
+        var parts = AppSettings.shared.providerOrder.compactMap { statusBarPart(for: $0, snap) }
+        if let budget = budgetPart(snap) { parts.append(budget) }
         guard let button = statusItem.button else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
+        let style = AppSettings.shared.limitStyle
         let title = NSMutableAttributedString()
-        for part in parts { if title.length > 0 { title.append(NSAttributedString(string: "   ", attributes: [.font: font])) }; let color: NSColor = part.warning ? .systemRed : .labelColor; title.append(BrandIcons.attachment(part.icon, font: font, color: color)); title.append(NSAttributedString(string: " " + part.text, attributes: [.font: font, .foregroundColor: color])) }
+        for part in parts {
+            if title.length > 0 { title.append(NSAttributedString(string: "   ", attributes: [.font: font])) }
+            let color: NSColor = part.warning ? .systemRed : .labelColor
+            title.append(BrandIcons.attachment(part.icon, font: font, color: color))
+            title.append(NSAttributedString(string: " ", attributes: [.font: font]))
+            if let remaining = part.remainingPercent, style != .percentOnly {
+                title.append(MiniMeter.attachment(remainingPercent: remaining, style: style, font: font, color: color))
+            } else {
+                title.append(NSAttributedString(string: part.text, attributes: [.font: font, .foregroundColor: color]))
+            }
+        }
         button.attributedTitle = title.length == 0 ? NSAttributedString(string: "AI —", attributes: [.font: font]) : title
     }
 

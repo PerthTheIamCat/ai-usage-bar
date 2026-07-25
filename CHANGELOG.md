@@ -2,6 +2,30 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Limit style (bar/ring/percent) moved to the menu bar — it was originally
+  wired to the popover's rows in 0.7.0, but that was the wrong surface; the
+  popover always shows the full bar meter now, same as before 0.7.0. The
+  menu bar's compact title draws a small inline bar or ring graphic instead
+  of (or alongside) the percentage, per the Settings › General picker.
+
+### Added
+
+- Budget alert (Settings › Cost) — set a $/day or $/30-days cap; the menu
+  bar shows a warning segment and the popover's Analytics pane shows a
+  banner once spend crosses 80% of it.
+- Native notifications when a limit window drops below the warn threshold
+  or the budget alert goes over (Settings › General toggle) — fires once
+  per crossing, not repeatedly.
+- "Copy Usage Report" button in the popover footer — copies a plain-text
+  summary of today's stats to the clipboard.
+- Calendar heatmap in the Analytics pane (Settings-free, always on) — a
+  GitHub-contributions-style grid over the last 30 days, reusing the same
+  trend data already fetched for the trend chart.
+
 ## [0.7.0] - 2026-07-25
 
 ### Added

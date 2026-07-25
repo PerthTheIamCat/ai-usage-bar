@@ -24,58 +24,90 @@ enum ProviderColor {
     static let antigravity = BrandIcons.geminiBrandColor
 }
 
-/// Rounded capsule meter. Fills with remaining capacity in remaining mode and
-/// with consumed capacity in used mode; color always tracks how close the
-/// limit is. Draws with semantic colors so it adapts to light/dark. Hosted in
-/// the popover via `NSViewRepresentable`.
+/// Draws a capsule meter filling `rect` in the current graphics context —
+/// shared by `LimitBarView` (a live popover NSView) and `MiniMeter` (an
+/// offscreen NSImage for the menu-bar title), so the two only ever draw the
+/// bar one way.
+func drawCapsuleMeter(in rect: NSRect, remainingPercent: Double, color: NSColor) {
+    let radius = rect.height / 2
+    NSColor.quaternaryLabelColor.setFill()
+    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+
+    let clamped = max(0, min(100, remainingPercent))
+    let shown = AppSettings.shared.displayMode == .used ? 100 - clamped : clamped
+    let w = rect.width * CGFloat(shown / 100)
+    guard w > 0 else { return }
+    // Never draw the fill narrower than the capsule's own radius.
+    let fillRect = NSRect(x: rect.minX, y: rect.minY, width: max(w, rect.height), height: rect.height)
+    color.setFill()
+    NSBezierPath(roundedRect: fillRect, xRadius: radius, yRadius: radius).fill()
+}
+
+/// Draws a circular arc meter filling `rect`, same clockwise-drain-from-12
+/// o'clock technique as `RefreshCountdownView`'s ring. Shared by `MiniMeter`
+/// (menu-bar title) — there's no popover ring anymore, the dropdown always
+/// uses the bar (Settings › General › Limit style only affects the menu bar).
+func drawRingMeter(in rect: NSRect, remainingPercent: Double, color: NSColor) {
+    let lineWidth = max(1.5, min(rect.width, rect.height) * 0.16)
+    let inset = rect.insetBy(dx: lineWidth / 2, dy: lineWidth / 2)
+    let center = NSPoint(x: inset.midX, y: inset.midY)
+    let radius = min(inset.width, inset.height) / 2
+
+    let track = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+    track.lineWidth = lineWidth
+    NSColor.quaternaryLabelColor.setStroke()
+    track.stroke()
+
+    let clamped = max(0, min(100, remainingPercent))
+    let shown = AppSettings.shared.displayMode == .used ? 100 - clamped : clamped
+    let fraction = CGFloat(shown / 100)
+    guard fraction > 0 else { return }
+
+    let arc = NSBezierPath()
+    arc.appendArc(withCenter: center, radius: radius, startAngle: 90, endAngle: 90 - fraction * 360, clockwise: true)
+    arc.lineWidth = lineWidth
+    arc.lineCapStyle = .round
+    color.setStroke()
+    arc.stroke()
+}
+
+/// Rounded capsule meter, live in the popover. Fills with remaining capacity
+/// in remaining mode and with consumed capacity in used mode; color always
+/// tracks how close the limit is. Hosted via `NSViewRepresentable`.
 final class LimitBarView: NSView {
     var remainingPercent: Double = 0 { didSet { needsDisplay = true } }
 
     override func draw(_ dirtyRect: NSRect) {
-        let radius = bounds.height / 2
-        NSColor.quaternaryLabelColor.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
-
-        let clamped = max(0, min(100, remainingPercent))
-        let shown = AppSettings.shared.displayMode == .used ? 100 - clamped : clamped
-        let w = bounds.width * CGFloat(shown / 100)
-        guard w > 0 else { return }
-        // Never draw the fill narrower than the capsule's own radius.
-        let fillRect = NSRect(x: 0, y: 0, width: max(w, bounds.height), height: bounds.height)
-        limitColor(clamped).setFill()
-        NSBezierPath(roundedRect: fillRect, xRadius: radius, yRadius: radius).fill()
+        drawCapsuleMeter(in: bounds, remainingPercent: remainingPercent, color: limitColor(remainingPercent))
     }
 }
 
-/// Circular arc meter — an alternative to `LimitBarView` for users who prefer
-/// a ring over a horizontal bar (Settings › General › Limit style). Same
-/// clockwise-drain-from-12-o'clock technique as `RefreshCountdownView`'s
-/// ring, same color-coding via `limitColor` as `LimitBarView`.
-final class LimitRingView: NSView {
-    var remainingPercent: Double = 0 { didSet { needsDisplay = true } }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let lineWidth: CGFloat = 4
-        let rect = bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2)
-        let center = NSPoint(x: rect.midX, y: rect.midY)
-        let radius = min(rect.width, rect.height) / 2
-
-        let track = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
-        track.lineWidth = lineWidth
-        NSColor.quaternaryLabelColor.setStroke()
-        track.stroke()
-
-        let clamped = max(0, min(100, remainingPercent))
-        let shown = AppSettings.shared.displayMode == .used ? 100 - clamped : clamped
-        let fraction = CGFloat(shown / 100)
-        guard fraction > 0 else { return }
-
-        let arc = NSBezierPath()
-        arc.appendArc(withCenter: center, radius: radius, startAngle: 90, endAngle: 90 - fraction * 360, clockwise: true)
-        arc.lineWidth = lineWidth
-        arc.lineCapStyle = .round
-        limitColor(clamped).setStroke()
-        arc.stroke()
+/// Small inline bar/ring meter embedded in the menu-bar title via
+/// `NSTextAttachment`, vertically centered on `font` like
+/// `BrandIcons.attachment`. Settings › General › Limit style picks bar vs.
+/// ring; `.percentOnly` never reaches this — callers keep plain text then.
+enum MiniMeter {
+    static func attachment(remainingPercent: Double, style: LimitStyle, font: NSFont, color: NSColor) -> NSAttributedString {
+        let height = font.pointSize * 0.75
+        let image: NSImage
+        switch style {
+        case .bar, .percentOnly:
+            let size = NSSize(width: height * 2.4, height: height)
+            image = NSImage(size: size, flipped: false) { rect in
+                drawCapsuleMeter(in: rect, remainingPercent: remainingPercent, color: color)
+                return true
+            }
+        case .ring:
+            let size = NSSize(width: height, height: height)
+            image = NSImage(size: size, flipped: false) { rect in
+                drawRingMeter(in: rect, remainingPercent: remainingPercent, color: color)
+                return true
+            }
+        }
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        attachment.bounds = CGRect(x: 0, y: (font.capHeight - image.size.height) / 2, width: image.size.width, height: image.size.height)
+        return NSAttributedString(attachment: attachment)
     }
 }
 
@@ -339,6 +371,68 @@ final class DailyTrendChartView: NSView {
             let x = chart.minX + CGFloat(i) * (barWidth + gap) + barWidth / 2 - 16
             text.frame = NSRect(x: x, y: chart.minY - 15, width: 32, height: 12)
             text.draw(text.bounds)
+        }
+    }
+}
+
+/// GitHub-contributions-style grid: one cell per day (rows = weekday,
+/// columns = week), colored by that day's combined cost intensity. Reuses
+/// the same `DailyTrend` already fetched for the trend chart — no separate
+/// file scan just for this view.
+final class CalendarHeatmapView: NSView {
+    private let trend: DailyTrend
+
+    init(trend: DailyTrend) {
+        self.trend = trend
+        super.init(frame: NSRect(x: 0, y: 0, width: MenuMetrics.width, height: 120))
+        setAccessibilityElement(true)
+        setAccessibilityRole(.image)
+        setAccessibilityLabel("Calendar heatmap of the last \(trend.days.count) days")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let plot = bounds.insetBy(dx: MenuMetrics.inset, dy: 8)
+        guard !trend.days.isEmpty else { return }
+
+        let calendar = Calendar.current
+        // Calendar.weekday is 1=Sunday...7=Saturday; use 0=Sunday...6=Saturday
+        // as the row index so the grid reads Sun (top) to Sat (bottom).
+        let firstRow = calendar.component(.weekday, from: trend.days[0]) - 1
+        let totalCells = firstRow + trend.days.count
+        let columns = Int(ceil(Double(totalCells) / 7.0))
+
+        let gap: CGFloat = 3
+        let cellSize = min((plot.width - CGFloat(columns - 1) * gap) / CGFloat(columns),
+                            (plot.height - 6 * gap) / 7)
+        let gridWidth = CGFloat(columns) * cellSize + CGFloat(columns - 1) * gap
+        let gridHeight = 7 * cellSize + 6 * gap
+        let originX = plot.minX + max(0, (plot.width - gridWidth) / 2)
+        let originY = plot.minY + max(0, (plot.height - gridHeight) / 2)
+
+        let totals = trend.totalCostUSD
+        let maxValue = max(0.01, totals.max() ?? 0)
+
+        for (index, _) in trend.days.enumerated() {
+            let cellIndex = firstRow + index
+            let column = cellIndex / 7
+            let row = cellIndex % 7 // 0 = Sunday
+            let x = originX + CGFloat(column) * (cellSize + gap)
+            // Grid is laid out Sunday-at-top, but AppKit's y grows upward,
+            // so row 0 (Sunday) needs the highest y within the grid.
+            let y = originY + gridHeight - cellSize - CGFloat(row) * (cellSize + gap)
+
+            let color: NSColor
+            if totals[index] <= 0 {
+                color = NSColor.quaternaryLabelColor
+            } else {
+                let intensity = min(1, totals[index] / maxValue)
+                color = NSColor.systemBlue.withAlphaComponent(0.25 + 0.65 * intensity)
+            }
+            color.setFill()
+            NSBezierPath(roundedRect: NSRect(x: x, y: y, width: cellSize, height: cellSize), xRadius: 2, yRadius: 2).fill()
         }
     }
 }
