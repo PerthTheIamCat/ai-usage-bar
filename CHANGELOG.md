@@ -2,6 +2,24 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.7.0] - 2026-07-25
+
+### Added
+
+- Customizable limit display style — Settings › General now has a Bar /
+  Ring / Percent-only picker for how each limit window is drawn. Ring is a
+  new circular arc meter; Percent-only drops the meter graphic entirely for
+  a denser, text-only row.
+- Analytics pane split into "Today" and "Trend" sections:
+  - Today's hourly chart now draws three separate colored lines
+    (Claude/Codex/Antigravity) with a legend instead of one blended line —
+    tokens and prompt-counts aren't the same unit, so summing them into one
+    number was never that meaningful.
+  - New 7-day / 30-day trend chart (stacked daily cost bars per provider,
+    with a segmented range switcher) — Analytics previously only knew
+    about today.
+  - Busiest weekday note in the 30-day view.
+
 ## [0.6.1] - 2026-07-25
 
 ### Added

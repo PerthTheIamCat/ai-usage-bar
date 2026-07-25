@@ -31,6 +31,23 @@ enum UsageDisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// How a limit window's remaining capacity is drawn in the popover.
+enum LimitStyle: String, CaseIterable, Identifiable {
+    case bar        // horizontal capsule meter (original look)
+    case ring       // circular arc meter
+    case percentOnly // colored percentage text only, no meter graphic
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .bar: return "Bar"
+        case .ring: return "Ring"
+        case .percentOnly: return "Percent only"
+        }
+    }
+}
+
 /// A detected usage provider. Order here is the fallback default order;
 /// users can reorder in Settings › Providers, which drives both the
 /// status-bar segment order and the dropdown section order.
@@ -75,6 +92,7 @@ final class AppSettings: ObservableObject {
         static let showPeriodCost = "showPeriodCost"
         static let showSkillsUsed = "showSkillsUsed"
         static let menuBarHiddenProviders = "menuBarHiddenProviders"
+        static let limitStyle = "limitStyle"
     }
 
     @Published var displayMode: UsageDisplayMode {
@@ -171,6 +189,14 @@ final class AppSettings: ObservableObject {
         if shown { menuBarHiddenProviders.remove(kind) } else { menuBarHiddenProviders.insert(kind) }
     }
 
+    /// How limit windows are drawn in the popover — bar, ring, or plain text.
+    @Published var limitStyle: LimitStyle {
+        didSet {
+            UserDefaults.standard.set(limitStyle.rawValue, forKey: Keys.limitStyle)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
     // MARK: - Optional dropdown rows
     // The core rows (limit windows, today's tokens, Est. cost) always show;
     // these extras can be hidden individually to cut clutter.
@@ -236,5 +262,7 @@ final class AppSettings: ObservableObject {
 
         let hiddenRaw = (d.array(forKey: Keys.menuBarHiddenProviders) as? [String]) ?? []
         menuBarHiddenProviders = Set(hiddenRaw.compactMap(ProviderKind.init(rawValue:)))
+
+        limitStyle = LimitStyle(rawValue: d.string(forKey: Keys.limitStyle) ?? "") ?? .bar
     }
 }

@@ -40,13 +40,52 @@ struct AntigravityUsage {
     var isWorking = false
 }
 
+/// Today's activity by hour, split per provider so the chart can show which
+/// tool a burst of activity actually came from instead of one blended line.
 struct HourlyUsage {
-    var values = Array(repeating: 0, count: 24)
+    var claude = Array(repeating: 0, count: 24)
+    var codex = Array(repeating: 0, count: 24)
+    var antigravity = Array(repeating: 0, count: 24)
+
+    /// Combined signal, for call sites that just want "activity" regardless
+    /// of provider (e.g. peak-hour note).
+    var values: [Int] { (0..<24).map { claude[$0] + codex[$0] + antigravity[$0] } }
 
     var total: Int { values.reduce(0, +) }
     var peakHour: Int? {
         guard let peak = values.max(), peak > 0 else { return nil }
         return values.firstIndex(of: peak)
+    }
+}
+
+/// Per-day totals for the trailing `days.count` days (oldest first, today
+/// last), for the Analytics trend chart. Every array is always exactly
+/// `days.count` long — zero-filled for a day/provider with no activity —
+/// so consumers can index without bounds-checking.
+struct DailyTrend {
+    var days: [Date] = []
+    var claudeTokens: [Int] = []
+    var claudeCostUSD: [Double] = []
+    var codexTokens: [Int] = []
+    var codexCostUSD: [Double] = []
+    var antigravityPrompts: [Int] = []
+    var antigravityCostUSD: [Double] = []
+
+    var totalTokens: [Int] { (0..<days.count).map { claudeTokens[$0] + codexTokens[$0] } }
+    var totalCostUSD: [Double] { (0..<days.count).map { claudeCostUSD[$0] + codexCostUSD[$0] + antigravityCostUSD[$0] } }
+
+    /// Weekday (1 = Sunday...7 = Saturday, per `Calendar.component(.weekday:)`)
+    /// with the highest summed token+prompt activity across this range, and
+    /// its total. nil when there's no activity at all in range.
+    var busiestWeekday: (weekday: Int, total: Int)? {
+        var byWeekday: [Int: Int] = [:]
+        let calendar = Calendar.current
+        for (index, day) in days.enumerated() {
+            let weekday = calendar.component(.weekday, from: day)
+            byWeekday[weekday, default: 0] += totalTokens[index] + antigravityPrompts[index]
+        }
+        guard let best = byWeekday.max(by: { $0.value < $1.value }), best.value > 0 else { return nil }
+        return (best.key, best.value)
     }
 }
 
@@ -69,6 +108,7 @@ struct UsageSnapshot {
     var codexLimits: CodexLimits?
     var hourlyUsage = HourlyUsage()
     var periodCosts: PeriodCosts?
+    var dailyTrend: DailyTrend?
     var updatedAt = Date()
 }
 

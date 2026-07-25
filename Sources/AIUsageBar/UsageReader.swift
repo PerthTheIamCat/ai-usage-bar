@@ -30,7 +30,10 @@ enum UsageReader {
             snap.antigravity = readAntigravityToday()
         }
         snap.hourlyUsage = readHourlyUsage()
-        if includePeriodStats { snap.periodCosts = periodCosts() }
+        if includePeriodStats {
+            snap.periodCosts = periodCosts()
+            snap.dailyTrend = dailyTrend(days: 30)
+        }
         snap.updatedAt = Date()
         return snap
     }
@@ -61,7 +64,7 @@ enum UsageReader {
                     else { return }
                     let tokens = ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
                         .reduce(0) { $0 + ((tokenUsage[$1] as? Int) ?? 0) }
-                    usage.values[localHour(date)] += tokens
+                    usage.claude[localHour(date)] += tokens
                 }
             }
         }
@@ -86,7 +89,7 @@ enum UsageReader {
                           let date = parseISO(ts)
                     else { return }
                     let delta = max(0, total - previous)
-                    usage.values[localHour(date)] += delta
+                    usage.codex[localHour(date)] += delta
                     previous = max(previous, total)
                 }
             }
@@ -100,7 +103,7 @@ enum UsageReader {
                       let timestampMS = obj["timestamp"] as? Double
                 else { return }
                 let date = Date(timeIntervalSince1970: timestampMS / 1000.0)
-                if Calendar.current.isDateInToday(date) { usage.values[localHour(date)] += 1 }
+                if Calendar.current.isDateInToday(date) { usage.antigravity[localHour(date)] += 1 }
             }
         }
         return usage
@@ -451,6 +454,149 @@ enum UsageReader {
             out.antigravityUSD30 = Pricing.antigravityCostUSD(u30)
         }
         return out
+    }
+
+    /// Per-day totals for the trailing `days` days (oldest first, today
+    /// last), for the Analytics trend chart. Same throttling concern as
+    /// `periodCosts()` — scans up to `days` days of logs.
+    static func dailyTrend(days: Int) -> DailyTrend {
+        var out = DailyTrend()
+        let todayStart = Calendar.current.startOfDay(for: Date())
+        out.days = (0..<days).map { todayStart.addingTimeInterval(-Double(days - 1 - $0) * 86400) }
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: claudeDir.path) {
+            let (tokens, cost) = claudeDailyBuckets(days: days)
+            out.claudeTokens = tokens
+            out.claudeCostUSD = cost
+        } else {
+            out.claudeTokens = Array(repeating: 0, count: days)
+            out.claudeCostUSD = Array(repeating: 0, count: days)
+        }
+        if fm.fileExists(atPath: codexDir.path) {
+            let (tokens, cost) = codexDailyBuckets(days: days)
+            out.codexTokens = tokens
+            out.codexCostUSD = cost
+        } else {
+            out.codexTokens = Array(repeating: 0, count: days)
+            out.codexCostUSD = Array(repeating: 0, count: days)
+        }
+        if fm.fileExists(atPath: antigravityDir.path) {
+            let (prompts, cost) = antigravityDailyBuckets(days: days)
+            out.antigravityPrompts = prompts
+            out.antigravityCostUSD = cost
+        } else {
+            out.antigravityPrompts = Array(repeating: 0, count: days)
+            out.antigravityCostUSD = Array(repeating: 0, count: days)
+        }
+        return out
+    }
+
+    /// Index into a `days`-length bucket array (0 = oldest, `days - 1` =
+    /// today) for a given ISO timestamp, or nil if it falls outside range.
+    private static func dailyBucketIndex(_ isoTimestamp: String, days: Int, todayStart: Date) -> Int? {
+        guard let date = parseISO(isoTimestamp) else { return nil }
+        let dayStart = Calendar.current.startOfDay(for: date)
+        let offsetFromToday = Calendar.current.dateComponents([.day], from: dayStart, to: todayStart).day ?? 0
+        let index = days - 1 - offsetFromToday
+        return (0..<days).contains(index) ? index : nil
+    }
+
+    private static func claudeDailyBuckets(days: Int) -> (tokens: [Int], costUSD: [Double]) {
+        let files = filesModified(under: claudeDir, ext: "jsonl", sinceDaysAgo: days)
+        var perKey: [String: (tokens: ModelTokens, model: String?, ts: String)] = [:]
+        for file in files {
+            forEachLine(of: file) { line in
+                guard line.contains("\"usage\""), line.contains("\"assistant\"") else { return }
+                guard let data = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      (obj["type"] as? String) == "assistant",
+                      let ts = obj["timestamp"] as? String,
+                      isWithinLastDays(isoTimestamp: ts, days: days),
+                      let message = obj["message"] as? [String: Any],
+                      let u = message["usage"] as? [String: Any]
+                else { return }
+                let key = (obj["requestId"] as? String) ?? (message["id"] as? String) ?? (obj["uuid"] as? String) ?? UUID().uuidString
+                let tokens = ModelTokens(
+                    input: u["input_tokens"] as? Int ?? 0,
+                    output: u["output_tokens"] as? Int ?? 0,
+                    cacheWrite: u["cache_creation_input_tokens"] as? Int ?? 0,
+                    cacheRead: u["cache_read_input_tokens"] as? Int ?? 0
+                )
+                perKey[key] = (tokens, message["model"] as? String, ts)
+            }
+        }
+        var tokenBuckets = Array(repeating: 0, count: days)
+        var costBuckets = Array(repeating: 0.0, count: days)
+        let todayStart = Calendar.current.startOfDay(for: Date())
+        for (_, e) in perKey {
+            guard let index = dailyBucketIndex(e.ts, days: days, todayStart: todayStart) else { continue }
+            tokenBuckets[index] += e.tokens.input + e.tokens.output + e.tokens.cacheWrite + e.tokens.cacheRead
+            costBuckets[index] += Pricing.claudeModelCostUSD(e.tokens, model: e.model ?? "")
+        }
+        return (tokenBuckets, costBuckets)
+    }
+
+    private static func codexDailyBuckets(days: Int) -> (tokens: [Int], costUSD: [Double]) {
+        var tokenBuckets = Array(repeating: 0, count: days)
+        var costBuckets = Array(repeating: 0.0, count: days)
+        let todayStart = Calendar.current.startOfDay(for: Date())
+        for file in filesModified(under: codexDir, ext: "jsonl", sinceDaysAgo: days) {
+            // total_token_usage is cumulative per session; last event wins.
+            var last: [String: Int]?
+            var lastTS: String?
+            forEachLine(of: file) { line in
+                guard line.contains("\"token_count\"") else { return }
+                guard let data = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let payload = obj["payload"] as? [String: Any],
+                      (payload["type"] as? String) == "token_count",
+                      let info = payload["info"] as? [String: Any],
+                      let total = info["total_token_usage"] as? [String: Any]
+                else { return }
+                last = total.compactMapValues { $0 as? Int }
+                lastTS = obj["timestamp"] as? String
+            }
+            guard let t = last, let ts = lastTS, isWithinLastDays(isoTimestamp: ts, days: days),
+                  let index = dailyBucketIndex(ts, days: days, todayStart: todayStart)
+            else { continue }
+            var usage = CodexUsage()
+            usage.inputTokens = t["input_tokens"] ?? 0
+            usage.cachedInputTokens = t["cached_input_tokens"] ?? 0
+            usage.outputTokens = t["output_tokens"] ?? 0
+            usage.reasoningTokens = t["reasoning_output_tokens"] ?? 0
+            usage.totalTokens = t["total_tokens"] ?? 0
+            tokenBuckets[index] += usage.totalTokens
+            costBuckets[index] += Pricing.codexCostUSD(usage)
+        }
+        return (tokenBuckets, costBuckets)
+    }
+
+    private static func antigravityDailyBuckets(days: Int) -> (prompts: [Int], costUSD: [Double]) {
+        var promptBuckets = Array(repeating: 0, count: days)
+        let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
+        guard FileManager.default.fileExists(atPath: historyFile.path) else {
+            return (promptBuckets, Array(repeating: 0, count: days))
+        }
+        let todayStart = Calendar.current.startOfDay(for: Date())
+        forEachLine(of: historyFile) { line in
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let timestampMS = obj["timestamp"] as? Double
+            else { return }
+            let date = Date(timeIntervalSince1970: timestampMS / 1000.0)
+            let dayStart = Calendar.current.startOfDay(for: date)
+            let offsetFromToday = Calendar.current.dateComponents([.day], from: dayStart, to: todayStart).day ?? 0
+            let index = days - 1 - offsetFromToday
+            guard (0..<days).contains(index) else { return }
+            promptBuckets[index] += 1
+        }
+        let costBuckets = promptBuckets.map { count -> Double in
+            var u = AntigravityUsage()
+            u.totalPrompts = count
+            return Pricing.antigravityCostUSD(u)
+        }
+        return (promptBuckets, costBuckets)
     }
 
     /// Antigravity stores quota responses in different cache locations across

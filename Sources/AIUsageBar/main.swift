@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // today-only reads (scans up to 30 days of logs), so they're recomputed
     // on their own slow cadence and cached like lastGoodClaude above.
     private var lastGoodPeriodCosts: PeriodCosts?
+    private var lastGoodDailyTrend: DailyTrend?
     private var nextPeriodStatsAt = Date.distantPast
     private let periodStatsInterval: TimeInterval = 30 * 60
     // A limits fetch can block for a long time on the keychain-permission
@@ -183,9 +184,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 if doPeriodStats {
                     self.lastGoodPeriodCosts = snap.periodCosts
+                    self.lastGoodDailyTrend = snap.dailyTrend
                     self.nextPeriodStatsAt = Date().addingTimeInterval(self.periodStatsInterval)
                 } else {
                     snap.periodCosts = self.lastGoodPeriodCosts
+                    snap.dailyTrend = self.lastGoodDailyTrend
                 }
                 self.apply(snap)
             }

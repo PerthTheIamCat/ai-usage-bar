@@ -16,12 +16,31 @@ private struct LimitBarRepresentable: NSViewRepresentable {
     }
 }
 
+private struct LimitRingRepresentable: NSViewRepresentable {
+    let remainingPercent: Double
+    func makeNSView(context: Context) -> LimitRingView {
+        let v = LimitRingView()
+        v.remainingPercent = remainingPercent
+        return v
+    }
+    func updateNSView(_ nsView: LimitRingView, context: Context) {
+        nsView.remainingPercent = remainingPercent
+    }
+}
+
 private struct HourlyChartRepresentable: NSViewRepresentable {
     let usage: HourlyUsage
     func makeNSView(context: Context) -> HourlyUsageChartView { HourlyUsageChartView(usage: usage) }
     // HourlyUsageChartView's data is set once at init; the call site forces a
     // fresh instance via `.id(usage.values)` when the data actually changes.
     func updateNSView(_ nsView: HourlyUsageChartView, context: Context) {}
+}
+
+private struct DailyTrendChartRepresentable: NSViewRepresentable {
+    let trend: DailyTrend
+    func makeNSView(context: Context) -> DailyTrendChartView { DailyTrendChartView(trend: trend) }
+    // Same story — call site uses `.id()` keyed on the range + day count.
+    func updateNSView(_ nsView: DailyTrendChartView, context: Context) {}
 }
 
 private struct RefreshCountdownRepresentable: NSViewRepresentable {
@@ -118,23 +137,64 @@ struct PaneHeader: View {
 struct LimitRow: View {
     let name: String
     let window: LimitWindow
+    @ObservedObject private var settings = AppSettings.shared
+
     var body: some View {
         let remaining = window.remainingPercent
-        VStack(alignment: .leading, spacing: 6) {
+        let shownPercent = settings.displayMode == .used ? 100 - remaining : remaining
+
+        switch settings.limitStyle {
+        case .bar:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(name).font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Text(settings.displayMode.rowText(remaining: remaining))
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Color(nsColor: limitColor(remaining)))
+                }
+                LimitBarRepresentable(remainingPercent: remaining)
+                    .frame(height: 5)
+                Text("resets in \(humanReset(window.resetsAt))")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 2)
+
+        case .ring:
+            HStack(spacing: 10) {
+                ZStack {
+                    LimitRingRepresentable(remainingPercent: remaining)
+                        .frame(width: 36, height: 36)
+                    Text("\(Int(shownPercent.rounded()))")
+                        .font(.system(size: 10, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Color(nsColor: limitColor(remaining)))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name).font(.system(size: 13, weight: .medium))
+                    Text("resets in \(humanReset(window.resetsAt))")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 2)
+
+        case .percentOnly:
             HStack {
                 Text(name).font(.system(size: 13, weight: .medium))
                 Spacer()
-                Text(AppSettings.shared.displayMode.rowText(remaining: remaining))
-                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Color(nsColor: limitColor(remaining)))
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(settings.displayMode.rowText(remaining: remaining))
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Color(nsColor: limitColor(remaining)))
+                    Text("resets in \(humanReset(window.resetsAt))")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
             }
-            LimitBarRepresentable(remainingPercent: remaining)
-                .frame(height: 5)
-            Text("resets in \(humanReset(window.resetsAt))")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
+            .padding(.vertical, 2)
         }
-        .padding(.vertical, 2)
     }
 }
 
@@ -357,11 +417,29 @@ struct AntigravityPane: View {
     }
 }
 
+private let weekdaySymbols = Calendar.current.weekdaySymbols // index 0 = Sunday, matching Calendar's 1-based .weekday component - 1
+
 struct AnalyticsPane: View {
     let snap: UsageSnapshot
+    @State private var trendDays = 7
 
     private var hasAnyProvider: Bool {
         snap.claude != nil || snap.codex != nil || snap.antigravity != nil
+    }
+
+    /// The cached 30-day trend covers both range options — a 7-day view is
+    /// just its last 7 entries, so switching ranges doesn't need a re-fetch.
+    private func trend(for days: Int) -> DailyTrend? {
+        guard let full = snap.dailyTrend, full.days.count >= days else { return nil }
+        var sliced = DailyTrend()
+        sliced.days = Array(full.days.suffix(days))
+        sliced.claudeTokens = Array(full.claudeTokens.suffix(days))
+        sliced.claudeCostUSD = Array(full.claudeCostUSD.suffix(days))
+        sliced.codexTokens = Array(full.codexTokens.suffix(days))
+        sliced.codexCostUSD = Array(full.codexCostUSD.suffix(days))
+        sliced.antigravityPrompts = Array(full.antigravityPrompts.suffix(days))
+        sliced.antigravityCostUSD = Array(full.antigravityCostUSD.suffix(days))
+        return sliced
     }
 
     var body: some View {
@@ -372,13 +450,38 @@ struct AnalyticsPane: View {
                     NoteText(text: "Looked for ~/.claude, ~/.codex and ~/.gemini")
                     Divider()
                 }
-                PaneHeader(title: "Analytics · Today")
+
+                PaneHeader(title: "Today")
                 if let peak = snap.hourlyUsage.peakHour {
                     NoteText(text: "Peak activity: \(String(format: "%02d:00", peak)) · \(formatTokens(snap.hourlyUsage.values[peak])) units")
                 }
                 HourlyChartRepresentable(usage: snap.hourlyUsage)
-                    .frame(height: 132)
+                    .frame(height: 148)
                     .id(snap.hourlyUsage.values)
+
+                Divider().padding(.vertical, 4)
+
+                HStack {
+                    PaneHeader(title: "Trend")
+                    Spacer()
+                    Picker("", selection: $trendDays) {
+                        Text("7 days").tag(7)
+                        Text("30 days").tag(30)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 150)
+                }
+                if let trend = trend(for: trendDays) {
+                    if let busiest = trend.busiestWeekday, trend.days.count > 7 {
+                        NoteText(text: "Busiest day: \(weekdaySymbols[busiest.weekday - 1])")
+                    }
+                    DailyTrendChartRepresentable(trend: trend)
+                        .frame(height: 140)
+                        .id(trendDays)
+                } else {
+                    NoteText(text: "Still gathering trend data — check back in a bit.")
+                }
                 Spacer(minLength: 0)
             }
             .padding(16)

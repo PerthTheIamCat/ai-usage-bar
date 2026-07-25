@@ -30,12 +30,24 @@ private struct GeneralTab: View {
 
     var body: some View {
         Form {
-            Section("Usage display") {
+            Section {
                 Picker("Show limits as", selection: $settings.displayMode) {
                     Text("Remaining — “84% left”").tag(UsageDisplayMode.remaining)
                     Text("Used — “16% used”").tag(UsageDisplayMode.used)
                 }
                 .pickerStyle(.segmented)
+                Picker("Limit style", selection: $settings.limitStyle) {
+                    ForEach(LimitStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Usage display")
+            } footer: {
+                Text("How each limit window is drawn in the popover — a bar, a ring, or just the percentage.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
