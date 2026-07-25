@@ -248,7 +248,12 @@ enum UsageReader {
             m.cacheWrite += e.cacheW
             m.cacheRead += e.cacheR
             usage.perModel[model] = m
-            for skill in e.skills { usage.skillCounts[skill, default: 0] += 1 }
+            for skill in e.skills {
+                usage.skillCounts[skill, default: 0] += 1
+                if let date = parseISO(e.ts) {
+                    usage.skillLastUsed[skill] = max(usage.skillLastUsed[skill] ?? .distantPast, date)
+                }
+            }
             if e.ts > latestTS, let m = e.model {
                 latestTS = e.ts
                 usage.lastModel = m

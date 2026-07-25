@@ -19,6 +19,9 @@ struct ClaudeUsage {
     var perModel: [String: ModelTokens] = [:]
     /// Invocation counts for Claude Code `Skill` tool calls, keyed by skill name.
     var skillCounts: [String: Int] = [:]
+    /// Most recent invocation time per skill — pairs with `skillCounts` for
+    /// a "what did I just use" view, not just an aggregate total.
+    var skillLastUsed: [String: Date] = [:]
 
     var total: Int { inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens }
 }

@@ -4,6 +4,13 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Skills used today now tracks last-used time per skill, not just a count
+  — the list sorts most-recently-used first instead of by count, so it
+  answers "what did I just use" as well as "which skills, how often."
+  `--dump` prints the same ordering.
+
 ### Changed
 
 - Limit style (bar/ring/percent) moved to the menu bar — it was originally

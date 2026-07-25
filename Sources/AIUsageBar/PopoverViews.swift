@@ -195,9 +195,13 @@ struct ClaudePane: View {
             .sorted { $0.costUSD > $1.costUSD }
     }
 
-    private var skillBreakdown: [(skill: String, count: Int)] {
+    /// Sorted most-recently-used first — answers "what did I just use" as
+    /// well as "which skills, how often."
+    private var skillBreakdown: [(skill: String, count: Int, lastUsed: Date?)] {
         guard let c else { return [] }
-        return c.skillCounts.map { (skill: $0.key, count: $0.value) }.sorted { $0.count > $1.count }
+        return c.skillCounts
+            .map { (skill: $0.key, count: $0.value, lastUsed: c.skillLastUsed[$0.key]) }
+            .sorted { ($0.lastUsed ?? .distantPast) > ($1.lastUsed ?? .distantPast) }
     }
 
     var body: some View {
@@ -225,9 +229,9 @@ struct ClaudePane: View {
                     }
 
                     if settings.showSkillsUsed && !skillBreakdown.isEmpty {
-                        CaptionText(title: "Skills used today")
+                        CaptionText(title: "Skills used today · most recent first")
                         ForEach(skillBreakdown, id: \.skill) { s in
-                            StatRow(name: s.skill, value: "\(s.count)×")
+                            StatRow(name: s.skill, value: "\(s.count)× · \(s.lastUsed.map(humanAgo) ?? "—")")
                         }
                     }
 

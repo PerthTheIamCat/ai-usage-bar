@@ -444,8 +444,12 @@ if CommandLine.arguments.contains("--dump") {
     if let c = snap.claude {
         print("Claude: total=\(formatTokens(c.total)) in=\(c.inputTokens) out=\(c.outputTokens) cacheW=\(c.cacheCreationTokens) cacheR=\(c.cacheReadTokens) sessions=\(c.sessionCount) model=\(c.lastModel ?? "-")")
         if !c.skillCounts.isEmpty {
-            let skills = c.skillCounts.sorted { $0.value > $1.value }.map { "\($0.key)×\($0.value)" }.joined(separator: ", ")
-            print("Claude skills today: \(skills)")
+            let skills = c.skillCounts
+                .map { (skill: $0.key, count: $0.value, lastUsed: c.skillLastUsed[$0.key]) }
+                .sorted { ($0.lastUsed ?? .distantPast) > ($1.lastUsed ?? .distantPast) }
+                .map { "\($0.skill)×\($0.count) (\($0.lastUsed.map(humanAgo) ?? "?"))" }
+                .joined(separator: ", ")
+            print("Claude skills today (most recent first): \(skills)")
         }
     } else {
         print("Claude: not detected")
