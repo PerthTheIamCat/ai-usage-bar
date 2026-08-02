@@ -19,7 +19,7 @@ struct SettingsView: View {
             ChangelogTab()
                 .tabItem { Label("Changelog", systemImage: "clock.arrow.circlepath") }
         }
-        .frame(width: 560, height: 440)
+        .frame(width: 620, height: 650)
     }
 }
 
@@ -36,16 +36,16 @@ private struct GeneralTab: View {
                     Text("Used — “16% used”").tag(UsageDisplayMode.used)
                 }
                 .pickerStyle(.segmented)
-                Picker("Menu bar style", selection: $settings.limitStyle) {
+                Picker("Default menu bar style", selection: $settings.limitStyle) {
                     ForEach(LimitStyle.allCases) { style in
                         Text(style.displayName).tag(style)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
             } header: {
                 Text("Usage display")
             } footer: {
-                Text("How each provider's status is drawn in the menu bar — a mini bar, a ring, or just the percentage. The popover always shows the full bar meter.")
+                Text("Used as the migration/default style. Choose a different style for each provider in Settings › Providers. The popover always shows the full bar meter.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -56,10 +56,11 @@ private struct GeneralTab: View {
                 Toggle("Avg/session", isOn: $settings.showAvgPerSession)
                 Toggle("7-day / 30-day cost", isOn: $settings.showPeriodCost)
                 Toggle("Skills used today", isOn: $settings.showSkillsUsed)
+                Toggle("Skills & tools by session", isOn: $settings.showSessionActivity)
             } header: {
                 Text("Dropdown content")
             } footer: {
-                Text("Pick which extra rows show per provider in the dropdown. Limits, today's tokens, and Est. cost always show.")
+                Text("These are global master switches. Use Settings › Providers for provider-specific detail choices. Limits, today's tokens, and Est. cost always show.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -81,6 +82,34 @@ private struct GeneralTab: View {
                 Text("Low-limit warning")
             } footer: {
                 Text("The menu-bar percentage and meters turn red when a window's remaining capacity drops below this. Notifications fire once per crossing (also covers the budget alert on the Cost tab) and still need macOS notification permission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Alert on unusually large session", isOn: $settings.sessionAlertEnabled)
+                if settings.sessionAlertEnabled {
+                    Picker("Token threshold", selection: $settings.sessionAlertThreshold) {
+                        ForEach([1_000_000.0, 5_000_000.0, 10_000_000.0, 25_000_000.0], id: \.self) { value in
+                            Text("\(formatTokens(Int(value))) tokens").tag(value)
+                        }
+                    }
+                }
+            } header: {
+                Text("Session alerts")
+            } footer: {
+                Text("Notifies once per launch when the largest Claude or Codex session crosses the threshold. Tool/skill cost attribution is an estimate split across calls.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Show session IDs", isOn: $settings.showSessionIdentifiers)
+                Toggle("Show workspace names", isOn: $settings.showSessionWorkspace)
+            } header: {
+                Text("Session privacy")
+            } footer: {
+                Text("Turning these off hides identifiers and workspace names from the popover and copied reports. Prompt text and tool arguments are never shown.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -116,8 +145,8 @@ private struct ProvidersTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Order").font(.headline)
-            Text("Drag to reorder — applies to both the status-bar segment order and the popover's sidebar order. Click the eye to hide a provider from the status bar specifically; it still stays in the popover.")
+            Text("Providers").font(.headline)
+            Text("Drag to reorder providers. Expand a provider to configure its menu-bar style, limit windows, popover visibility, and detail rows independently.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -128,20 +157,9 @@ private struct ProvidersTab: View {
                 .onMove { settings.moveProvider(fromOffsets: $0, toOffset: $1) }
             }
             .listStyle(.plain)
-            .frame(height: 150)
+            .frame(minHeight: 360, maxHeight: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            Divider().padding(.vertical, 4)
-
-            Text("Claude windows").font(.headline)
-            Toggle("5-hour window", isOn: $settings.showFiveHourInMenuBar)
-            Toggle("Weekly window", isOn: $settings.showWeeklyInMenuBar)
-            Text("Which Claude limit windows appear — in the menu-bar percentage and as rows in the dropdown.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Spacer()
         }
         .padding(20)
     }
@@ -150,28 +168,120 @@ private struct ProvidersTab: View {
 private struct ProviderRow: View {
     let kind: ProviderKind
     @ObservedObject private var settings = AppSettings.shared
+    @State private var expanded = false
 
     var body: some View {
-        let shown = settings.isShownInMenuBar(kind)
-        HStack(spacing: 10) {
-            Image(nsImage: kind.icon)
-                .renderingMode(.template)
-                .resizable()
-                .frame(width: 15, height: 15)
-            Text(kind.displayName)
-            Spacer()
-            Button {
-                settings.setShownInMenuBar(kind, !shown)
-            } label: {
-                Image(systemName: shown ? "eye" : "eye.slash")
-                    .foregroundStyle(shown ? Color.primary : Color.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                } label: {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .frame(width: 12)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(expanded ? "Collapse \(kind.displayName) settings" : "Expand \(kind.displayName) settings")
+
+                Image(nsImage: kind.icon)
+                    .renderingMode(.template)
+                    .resizable()
+                    .frame(width: 16, height: 16)
+                Text(kind.displayName)
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+
+                let menuShown = settings.isShownInMenuBar(kind)
+                Button {
+                    settings.setShownInMenuBar(kind, !menuShown)
+                } label: {
+                    Image(systemName: menuShown ? "eye" : "eye.slash")
+                        .foregroundStyle(menuShown ? Color.primary : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(menuShown ? "Shown in menu bar — click to hide" : "Hidden from menu bar — click to show")
+                .accessibilityLabel(menuShown ? "Hide \(kind.displayName) from menu bar" : "Show \(kind.displayName) in menu bar")
+
+                let popoverShown = settings.isShownInPopover(kind)
+                Button {
+                    settings.setShownInPopover(kind, !popoverShown)
+                } label: {
+                    Image(systemName: popoverShown ? "rectangle.portrait" : "rectangle.portrait.slash")
+                        .foregroundStyle(popoverShown ? Color.primary : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(popoverShown ? "Shown in popover — click to hide" : "Hidden from popover — click to show")
+                .accessibilityLabel(popoverShown ? "Hide \(kind.displayName) from popover" : "Show \(kind.displayName) in popover")
+
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
-            .help(shown ? "Showing in menu bar — click to hide" : "Hidden from menu bar — click to show")
-            Image(systemName: "line.3.horizontal")
-                .foregroundStyle(.tertiary)
+            .padding(.vertical, 4)
+
+            if expanded {
+                ProviderConfiguration(kind: kind)
+                    .padding(.bottom, 8)
+            }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
+    }
+}
+
+private struct ProviderConfiguration: View {
+    let kind: ProviderKind
+    @ObservedObject private var settings = AppSettings.shared
+
+    private var styleBinding: Binding<LimitStyle> {
+        Binding(
+            get: { settings.limitStyle(for: kind) },
+            set: { settings.setLimitStyle($0, for: kind) })
+    }
+
+    private func windowBinding(_ window: LimitWindowKind) -> Binding<Bool> {
+        Binding(
+            get: { settings.isLimitWindowShown(window, for: kind) },
+            set: { settings.setLimitWindowShown(window, for: kind, $0) })
+    }
+
+    private func detailBinding(_ detail: ProviderDetailKind) -> Binding<Bool> {
+        Binding(
+            get: { settings.providerDetails[kind]?.contains(detail) ?? true },
+            set: { settings.setDetailShown(detail, for: kind, $0) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            LabeledContent("Menu-bar style") {
+                Picker("Menu-bar style", selection: styleBinding) {
+                    ForEach(LimitStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 150, alignment: .trailing)
+            }
+
+            Text("Limit windows")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            ForEach(kind.supportedLimitWindows) { window in
+                Toggle(window.displayName, isOn: windowBinding(window))
+                    .toggleStyle(.checkbox)
+            }
+
+            Text("Popover details")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+            ForEach(kind.supportedDetails) { detail in
+                Toggle(detail.displayName, isOn: detailBinding(detail))
+                    .toggleStyle(.checkbox)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.leading, 28)
     }
 }
 
@@ -282,7 +392,7 @@ private struct LogTab: View {
                     logText = AppLog.shared.tail()
                 }
             }
-            Text("API calls, keychain reads, and errors. Stored at ~/Library/Logs/AIUsageBar/.")
+            Text("Local Claude/Codex snapshots, exchange-rate requests, and errors. Stored at ~/Library/Logs/AIUsageBar/.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

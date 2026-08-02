@@ -5,7 +5,7 @@ import Combine
 /// every refresh tick instead of rebuilding an NSMenu from scratch.
 final class UsageViewModel: ObservableObject {
     @Published var snapshot = UsageSnapshot()
-    @Published var claudeAPIProblem: String?
+    @Published var claudeLimitsProblem: String?
     @Published var lastGoodClaudeFetchedAt: Date?
     @Published var nextRefreshAt = Date()
     let refreshInterval: TimeInterval

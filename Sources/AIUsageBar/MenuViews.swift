@@ -71,6 +71,14 @@ func drawRingMeter(in rect: NSRect, remainingPercent: Double, color: NSColor) {
     arc.stroke()
 }
 
+/// Tiny status dot for the compact "dot + percent" menu-bar style.
+func drawDotMeter(in rect: NSRect, remainingPercent: Double, color: NSColor) {
+    let size = min(rect.width, rect.height) * 0.72
+    let dot = NSRect(x: rect.midX - size / 2, y: rect.midY - size / 2, width: size, height: size)
+    color.setFill()
+    NSBezierPath(ovalIn: dot).fill()
+}
+
 /// Rounded capsule meter, live in the popover. Fills with remaining capacity
 /// in remaining mode and with consumed capacity in used mode; color always
 /// tracks how close the limit is. Hosted via `NSViewRepresentable`.
@@ -85,24 +93,33 @@ final class LimitBarView: NSView {
 /// Small inline bar/ring meter embedded in the menu-bar title via
 /// `NSTextAttachment`, vertically centered on `font` like
 /// `BrandIcons.attachment`. Settings › General › Limit style picks bar vs.
-/// ring; `.percentOnly` never reaches this — callers keep plain text then.
+/// ring; percent-only is rendered as plain text by the caller.
 enum MiniMeter {
     static func attachment(remainingPercent: Double, style: LimitStyle, font: NSFont, color: NSColor) -> NSAttributedString {
         let height = font.pointSize * 0.75
         let image: NSImage
         switch style {
-        case .bar, .percentOnly:
+        case .bar, .barAndPercent:
             let size = NSSize(width: height * 2.4, height: height)
             image = NSImage(size: size, flipped: false) { rect in
                 drawCapsuleMeter(in: rect, remainingPercent: remainingPercent, color: color)
                 return true
             }
-        case .ring:
+        case .ring, .ringAndPercent:
             let size = NSSize(width: height, height: height)
             image = NSImage(size: size, flipped: false) { rect in
                 drawRingMeter(in: rect, remainingPercent: remainingPercent, color: color)
                 return true
             }
+        case .dotAndPercent:
+            let size = NSSize(width: height * 0.75, height: height)
+            image = NSImage(size: size, flipped: false) { rect in
+                drawDotMeter(in: rect, remainingPercent: remainingPercent, color: color)
+                return true
+            }
+        case .percentOnly:
+            let size = NSSize(width: height, height: height)
+            image = NSImage(size: size, flipped: false) { _ in true }
         }
         let attachment = NSTextAttachment()
         attachment.image = image

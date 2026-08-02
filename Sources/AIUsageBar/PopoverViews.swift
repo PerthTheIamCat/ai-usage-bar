@@ -166,11 +166,80 @@ func limitRowOrNote(_ name: String, _ w: LimitWindow) -> some View {
     }
 }
 
+private struct SessionActivityRow: View {
+    let session: SessionActivity
+    @ObservedObject private var settings = AppSettings.shared
+    @State private var isExpanded = false
+
+    private var shortID: String {
+        settings.showSessionIdentifiers ? String(session.id.prefix(12)) : "hidden"
+    }
+
+    private var timeText: String {
+        session.lastActivityAt?.formatted(date: .omitted, time: .shortened) ?? "—"
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 4) {
+                if !session.skills.isEmpty {
+                    Text(session.inferredSkills.isEmpty ? "Skills · associated est. cost" : "Skills (inferred) · associated est. cost")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(formatSessionActivityDetails(session.skills, costs: session.skillCosts))
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !session.tools.isEmpty {
+                    Text("Tools · associated est. cost")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(formatSessionActivityDetails(session.tools, costs: session.toolCosts))
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if session.skills.isEmpty && session.tools.isEmpty {
+                    NoteText(text: "No Skill/tool calls recorded")
+                }
+            }
+            .padding(.bottom, 4)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("Session \(shortID)")
+                        .font(.system(size: 12, weight: .medium).monospaced())
+                    Spacer()
+                    Text(timeText)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 6) {
+                    if settings.showSessionWorkspace, let workspace = session.workspace, !workspace.isEmpty {
+                        Text(workspace)
+                    }
+                    if let model = session.model, !model.isEmpty {
+                        Text(model)
+                    }
+                    Text("· \(formatTokens(session.tokenTotal)) tokens")
+                    if session.estimatedCostUSD > 0 {
+                        Text("· \(formatUSD(session.estimatedCostUSD))")
+                    }
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.vertical, 2)
+    }
+}
+
 // MARK: - Provider panes
 
 struct ClaudePane: View {
     let snap: UsageSnapshot
-    let claudeAPIProblem: String?
+    let claudeLimitsProblem: String?
     let lastGoodClaudeFetchedAt: Date?
     @ObservedObject private var settings = AppSettings.shared
 
@@ -178,7 +247,7 @@ struct ClaudePane: View {
     private var costUSD: Double { c.map(Pricing.claudeCostUSD) ?? 0 }
 
     private var problemText: String? {
-        guard let problem = claudeAPIProblem else { return nil }
+        guard let problem = claudeLimitsProblem else { return nil }
         var text = "⚠︎ \(problem)"
         if let goodAt = lastGoodClaudeFetchedAt {
             text += " · showing data from \(humanAgo(goodAt))"
@@ -214,24 +283,33 @@ struct ClaudePane: View {
 
                     CaptionText(title: "Today's tokens")
                     StatPairRow("Total", formatTokens(c.total), "Sessions", "\(c.sessionCount)")
-                    StatPairRow("Input", formatTokens(c.inputTokens), "Output", formatTokens(c.outputTokens))
-                    StatPairRow("Cache write", formatTokens(c.cacheCreationTokens), "Cache read", formatTokens(c.cacheReadTokens))
+                    if settings.showsDetail(.tokenBreakdown, for: .claude) {
+                        StatPairRow("Input", formatTokens(c.inputTokens), "Output", formatTokens(c.outputTokens))
+                        StatPairRow("Cache write", formatTokens(c.cacheCreationTokens), "Cache read", formatTokens(c.cacheReadTokens))
+                    }
 
-                    if settings.showCacheHitRate {
+                    if settings.showsDetail(.cacheHitRate, for: .claude) {
                         StatRow(name: "Cache hit rate", value: "\(Int(Pricing.claudeCacheHitRatePercent(c).rounded()))%")
                     }
 
-                    if settings.showModelBreakdown && modelBreakdown.count > 1 {
+                    if settings.showsDetail(.modelBreakdown, for: .claude) && modelBreakdown.count > 1 {
                         CaptionText(title: "By model")
                         ForEach(modelBreakdown, id: \.model) { m in
                             StatRow(name: m.model, value: "\(formatTokens(m.total)) · \(formatUSD(m.costUSD))")
                         }
                     }
 
-                    if settings.showSkillsUsed && !skillBreakdown.isEmpty {
+                    if settings.showsDetail(.skillsUsed, for: .claude) && !skillBreakdown.isEmpty {
                         CaptionText(title: "Skills used today · most recent first")
                         ForEach(skillBreakdown, id: \.skill) { s in
                             StatRow(name: s.skill, value: "\(s.count)× · \(s.lastUsed.map(humanAgo) ?? "—")")
+                        }
+                    }
+
+                    if settings.showsDetail(.sessionActivity, for: .claude) && !c.sessions.isEmpty {
+                        CaptionText(title: "Sessions today · skills & tools")
+                        ForEach(c.sessions) { session in
+                            SessionActivityRow(session: session)
                         }
                     }
 
@@ -239,13 +317,13 @@ struct ClaudePane: View {
                         StatRow(name: "Last model", value: m)
                     }
 
-                    if settings.showAvgPerSession {
+                    if settings.showsDetail(.averagePerSession, for: .claude) {
                         StatRow(name: "Avg/session",
                                 value: "\(formatTokens(c.total / max(1, c.sessionCount))) · \(formatUSD(costUSD / Double(max(1, c.sessionCount))))")
                     }
                     StatRow(name: "Est. cost", value: "\(formatTHB(costUSD)) · \(formatUSD(costUSD))")
 
-                    if settings.showPeriodCost, let pc = snap.periodCosts, let d7 = pc.claudeUSD7, let d30 = pc.claudeUSD30 {
+                    if settings.showsDetail(.periodCost, for: .claude), let pc = snap.periodCosts, let d7 = pc.claudeUSD7, let d30 = pc.claudeUSD30 {
                         StatPairRow("7-day", formatUSD(d7), "30-day", formatUSD(d30))
                     }
                 } else {
@@ -263,17 +341,18 @@ struct ClaudePane: View {
         if let l = snap.claudeLimits {
             switch l.state {
             case .ok:
-                if settings.showFiveHourInMenuBar, let w = l.fiveHour { limitRowOrNote("5-hour", w) }
-                if settings.showWeeklyInMenuBar, let w = l.sevenDay { limitRowOrNote("Weekly", w) }
-                if !settings.showFiveHourInMenuBar && !settings.showWeeklyInMenuBar {
+                if settings.isLimitWindowShown(.fiveHour, for: .claude), let w = l.fiveHour { limitRowOrNote("5-hour", w) }
+                if settings.isLimitWindowShown(.weekly, for: .claude), let w = l.sevenDay { limitRowOrNote("Weekly", w) }
+                if !settings.isLimitWindowShown(.fiveHour, for: .claude)
+                    && !settings.isLimitWindowShown(.weekly, for: .claude) {
                     NoteText(text: "Both windows hidden — enable in Settings › Providers")
                 }
-            case .rateLimited, .error:
-                NoteText(text: "No limit data to show yet — retrying next refresh")
+            case .unavailable:
+                NoteText(text: "No local Claude statusline data — configure the bridge")
             case .stale:
-                NoteText(text: "Login expired — run `claude` to sign in")
-            case .notLoggedIn:
-                NoteText(text: "Not logged in to Claude Code")
+                NoteText(text: "Local Claude statusline data is stale — use Claude Code again")
+            case .error(let message):
+                NoteText(text: "Claude local limits unavailable — \(message)")
             }
         } else {
             NoteText(text: "Fetching limits…")
@@ -298,18 +377,26 @@ struct CodexPane: View {
 
                     CaptionText(title: "Today's tokens")
                     StatPairRow("Total", formatTokens(x.totalTokens), "Sessions", "\(x.sessionCount)")
-                    StatPairRow("Input", formatTokens(x.inputTokens), "Cached in", formatTokens(x.cachedInputTokens))
-                    StatPairRow("Output", formatTokens(x.outputTokens), "Reasoning", formatTokens(x.reasoningTokens))
 
-                    if settings.showCacheHitRate {
+                    if settings.showsDetail(.tokenBreakdown, for: .codex) {
+                        StatPairRow("Input", formatTokens(x.inputTokens), "Cached in", formatTokens(x.cachedInputTokens))
+                        StatPairRow("Output", formatTokens(x.outputTokens), "Reasoning", formatTokens(x.reasoningTokens))
+                    }
+                    if settings.showsDetail(.cacheHitRate, for: .codex) {
                         StatRow(name: "Cache hit rate", value: "\(Int(Pricing.codexCacheHitRatePercent(x).rounded()))%")
                     }
-                    if settings.showAvgPerSession {
+                    if settings.showsDetail(.sessionActivity, for: .codex) && !x.sessions.isEmpty {
+                        CaptionText(title: "Sessions today · skills & tools")
+                        ForEach(x.sessions) { session in
+                            SessionActivityRow(session: session)
+                        }
+                    }
+                    if settings.showsDetail(.averagePerSession, for: .codex) {
                         StatRow(name: "Avg/session",
                                 value: "\(formatTokens(x.totalTokens / max(1, x.sessionCount))) · \(formatUSD(costUSD / Double(max(1, x.sessionCount))))")
                     }
                     StatRow(name: "Est. cost", value: "\(formatTHB(costUSD)) · \(formatUSD(costUSD))")
-                    if settings.showPeriodCost, let pc = snap.periodCosts, let d7 = pc.codexUSD7, let d30 = pc.codexUSD30 {
+                    if settings.showsDetail(.periodCost, for: .codex), let pc = snap.periodCosts, let d7 = pc.codexUSD7, let d30 = pc.codexUSD30 {
                         StatPairRow("7-day", formatUSD(d7), "30-day", formatUSD(d30))
                     }
                 } else {
@@ -326,7 +413,9 @@ struct CodexPane: View {
     private var codexLimitsSection: some View {
         if let l = snap.codexLimits {
             CaptionText(title: "Limits · as of \(humanAgo(l.asOf))")
-            if let w = l.secondary { limitRowOrNote("Weekly", w) }
+            let settings = AppSettings.shared
+            if settings.isLimitWindowShown(.fiveHour, for: .codex), let w = l.primary { limitRowOrNote("5-hour", w) }
+            if settings.isLimitWindowShown(.weekly, for: .codex), let w = l.secondary { limitRowOrNote("Weekly", w) }
         } else {
             NoteText(text: "No limit data yet — run codex once")
         }
@@ -349,12 +438,12 @@ struct AntigravityPane: View {
 
                     CaptionText(title: "Today's activity")
                     StatPairRow("Prompts", "\(g.totalPrompts)", "Sessions", "\(g.sessionCount)")
-                    if settings.showAvgPerSession {
+                    if settings.showsDetail(.averagePerSession, for: .antigravity) {
                         StatRow(name: "Avg/session",
                                 value: "\(g.totalPrompts / max(1, g.sessionCount))P · \(formatUSD(costUSD / Double(max(1, g.sessionCount))))")
                     }
                     StatRow(name: "Est. cost", value: "\(formatTHB(costUSD)) · \(formatUSD(costUSD))")
-                    if settings.showPeriodCost, let pc = snap.periodCosts, let d7 = pc.antigravityUSD7, let d30 = pc.antigravityUSD30 {
+                    if settings.showsDetail(.periodCost, for: .antigravity), let pc = snap.periodCosts, let d7 = pc.antigravityUSD7, let d30 = pc.antigravityUSD30 {
                         StatPairRow("7-day", formatUSD(d7), "30-day", formatUSD(d30))
                     }
                 } else {
@@ -369,11 +458,14 @@ struct AntigravityPane: View {
 
     @ViewBuilder
     private func antigravityLimitsSection(_ g: AntigravityUsage) -> some View {
-        if g.fiveHour == nil && g.weekly == nil {
+        let settings = AppSettings.shared
+        let fiveHour = settings.isLimitWindowShown(.fiveHour, for: .antigravity) ? g.fiveHour : nil
+        let weekly = settings.isLimitWindowShown(.weekly, for: .antigravity) ? g.weekly : nil
+        if fiveHour == nil && weekly == nil {
             NoteText(text: "No quota data yet — use Antigravity once to refresh it")
         } else {
-            if let w = g.fiveHour { limitRowOrNote("5-hour", w) }
-            if let w = g.weekly { limitRowOrNote("Weekly", w) }
+            if let w = fiveHour { limitRowOrNote("5-hour", w) }
+            if let w = weekly { limitRowOrNote("Weekly", w) }
         }
     }
 }
@@ -562,10 +654,19 @@ struct PopoverFooter: View {
     let onRefresh: () -> Void
     let onCheckForUpdates: () -> Void
     let onExportReport: () -> Void
+    let onExportJSON: () -> Void
+    let onExportCSV: () -> Void
+    let onSaveCSV: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
     @State private var justCopied = false
+
+    private func copy(_ action: () -> Void) {
+        action()
+        justCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { justCopied = false }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -588,10 +689,14 @@ struct PopoverFooter: View {
                 Spacer()
             }
             HStack(spacing: 8) {
-                Button(justCopied ? "Copied!" : "Copy Usage Report") {
-                    onExportReport()
-                    justCopied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { justCopied = false }
+                Menu {
+                    Button("Copy Markdown report") { copy(onExportReport) }
+                    Button("Copy JSON") { copy(onExportJSON) }
+                    Button("Copy CSV") { copy(onExportCSV) }
+                    Divider()
+                    Button("Save CSV…", action: onSaveCSV)
+                } label: {
+                    Label(justCopied ? "Copied!" : "Export…", systemImage: "square.and.arrow.up")
                 }
                 Spacer()
             }
@@ -617,13 +722,17 @@ struct PopoverContentView: View {
     let onRefresh: () -> Void
     let onCheckForUpdates: () -> Void
     let onExportReport: () -> Void
+    let onExportJSON: () -> Void
+    let onExportCSV: () -> Void
+    let onSaveCSV: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
     init(
         viewModel: UsageViewModel, appVersion: String,
         onRefresh: @escaping () -> Void, onCheckForUpdates: @escaping () -> Void,
-        onExportReport: @escaping () -> Void,
+        onExportReport: @escaping () -> Void, onExportJSON: @escaping () -> Void,
+        onExportCSV: @escaping () -> Void, onSaveCSV: @escaping () -> Void,
         onSettings: @escaping () -> Void, onQuit: @escaping () -> Void
     ) {
         self.viewModel = viewModel
@@ -631,6 +740,9 @@ struct PopoverContentView: View {
         self.onRefresh = onRefresh
         self.onCheckForUpdates = onCheckForUpdates
         self.onExportReport = onExportReport
+        self.onExportJSON = onExportJSON
+        self.onExportCSV = onExportCSV
+        self.onSaveCSV = onSaveCSV
         self.onSettings = onSettings
         self.onQuit = onQuit
         _selection = State(initialValue: Self.initialSelection(for: viewModel.snapshot))
@@ -638,6 +750,7 @@ struct PopoverContentView: View {
 
     private var tabs: [PopoverPane] {
         var t: [PopoverPane] = AppSettings.shared.providerOrder.compactMap { kind -> PopoverPane? in
+            guard AppSettings.shared.isShownInPopover(kind) else { return nil }
             switch kind {
             case .claude: return viewModel.snapshot.claude != nil ? .provider(kind) : nil
             case .codex: return viewModel.snapshot.codex != nil ? .provider(kind) : nil
@@ -650,6 +763,7 @@ struct PopoverContentView: View {
 
     private static func initialSelection(for snap: UsageSnapshot) -> PopoverPane {
         for kind in AppSettings.shared.providerOrder {
+            guard AppSettings.shared.isShownInPopover(kind) else { continue }
             switch kind {
             case .claude: if snap.claude != nil { return .provider(.claude) }
             case .codex: if snap.codex != nil { return .provider(.codex) }
@@ -667,7 +781,7 @@ struct PopoverContentView: View {
                 Group {
                     switch selection {
                     case .provider(.claude):
-                        ClaudePane(snap: viewModel.snapshot, claudeAPIProblem: viewModel.claudeAPIProblem, lastGoodClaudeFetchedAt: viewModel.lastGoodClaudeFetchedAt)
+                        ClaudePane(snap: viewModel.snapshot, claudeLimitsProblem: viewModel.claudeLimitsProblem, lastGoodClaudeFetchedAt: viewModel.lastGoodClaudeFetchedAt)
                     case .provider(.codex):
                         CodexPane(snap: viewModel.snapshot)
                     case .provider(.antigravity):
@@ -677,7 +791,7 @@ struct PopoverContentView: View {
                     }
                 }
                 .frame(maxHeight: .infinity)
-                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onSettings: onSettings, onQuit: onQuit)
+                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onExportJSON: onExportJSON, onExportCSV: onExportCSV, onSaveCSV: onSaveCSV, onSettings: onSettings, onQuit: onQuit)
             }
             .frame(width: 380)
         }

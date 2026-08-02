@@ -1,165 +1,151 @@
 import Foundation
-import Security
 
-private struct StringError: Error {
-    enum Kind { case unauthorized, rateLimited, other }
-    let message: String
-    var kind: Kind = .other
-    var retryAfter: TimeInterval?
-}
-
+/// Reads the rate-limit snapshot written by Claude Code's local `statusLine`
+/// command. AI Usage Bar deliberately does not call Claude's usage endpoint
+/// and never reads Claude credentials.
 enum ClaudeLimitsReader {
-    private static let service = "Claude Code-credentials"
-    private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-
-    /// In-memory copy of the CLI's access token. Keychain reads trigger a
-    /// password prompt whenever the app's code signature changes (ad-hoc
-    /// builds change every compile), so we hit the keychain once per launch
-    /// and again only when the server says the token is dead (401).
-    private static var cachedToken: String?
-
-    /// Read-only: uses the access token the Claude CLI already stored in the
-    /// login keychain. We never refresh or write back — refresh tokens are
-    /// single-use, so rotating one here would invalidate the CLI's own token
-    /// and log the user out.
-    ///
-    /// We do NOT trust the stored `expiresAt`: observed tokens keep working
-    /// well past that timestamp, so authority is the server's response — 401
-    /// means re-login is actually needed, 200 means the token is live.
-    static func fetch() -> ClaudeLimits {
-        var out = ClaudeLimits()
-        out.fetchedAt = Date()
-
-        var token = cachedToken
-        if token == nil {
-            appLog("claude: reading keychain credentials (no cached token)")
-            guard let creds = readKeychainCredentials() else {
-                appLog("claude: keychain read failed — not logged in")
-                out.state = .notLoggedIn
-                return out
-            }
-            token = creds.accessToken
-            cachedToken = token
-        }
-
-        var result = callUsage(token: token!)
-        if case .failure(let e) = result, e.kind == .unauthorized {
-            // Cached token rotated (new CLI session refreshed it). Re-read the
-            // keychain once; only if the keychain holds the same dead token is
-            // the login actually expired.
-            appLog("claude: got 401 — re-reading keychain for a rotated token")
-            cachedToken = nil
-            if let creds = readKeychainCredentials(), creds.accessToken != token {
-                cachedToken = creds.accessToken
-                result = callUsage(token: creds.accessToken)
-            }
-        }
-
-        switch result {
-        case .failure(let e):
-            appLog("claude: limits fetch failed — \(e.message)")
-            switch e.kind {
-            case .unauthorized: out.state = .stale
-            case .rateLimited: out.state = .rateLimited(retryAfter: e.retryAfter)
-            case .other: out.state = .error(e.message)
-            }
-        case .success(let json):
-            out.fiveHour = parseWindow(json["five_hour"])
-            out.sevenDay = parseWindow(json["seven_day"])
-            out.state = (out.fiveHour == nil && out.sevenDay == nil) ? .error("no limit data") : .ok
-            if case .ok = out.state {
-                appLog("claude: limits ok — 5h \(pct(out.fiveHour)) used, weekly \(pct(out.sevenDay)) used")
-            } else {
-                appLog("claude: limits fetch returned 200 but no window data")
-            }
-        }
-        return out
-    }
-
-    private static func pct(_ w: LimitWindow?) -> String {
-        w.map { "\(Int($0.usedPercent))%" } ?? "n/a"
-    }
-
-    // MARK: - Keychain
-
-    private struct Credentials { var accessToken: String; var expiresAt: Date? }
-
-    private static func readKeychainCredentials() -> Credentials? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = obj["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String, !token.isEmpty
-        else { return nil }
-        let exp = (oauth["expiresAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
-        return Credentials(accessToken: token, expiresAt: exp)
-    }
-
-    // MARK: - HTTP
-
-    private static func callUsage(token: String) -> Result<[String: Any], StringError> {
-        var req = URLRequest(url: usageURL, timeoutInterval: 10)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Match the CLI's client fingerprint so the edge treats us the same.
-        req.setValue("claude-cli/2.1.202 (external, cli)", forHTTPHeaderField: "User-Agent")
-
-        let sem = DispatchSemaphore(value: 0)
-        var result: Result<[String: Any], StringError> = .failure(StringError(message: "no response"))
-        let task = URLSession.shared.dataTask(with: req) { data, resp, err in
-            defer { sem.signal() }
-            if let err = err { result = .failure(StringError(message: err.localizedDescription)); return }
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard let data = data else { result = .failure(StringError(message: "empty response (HTTP \(code))")); return }
-            guard code == 200 else {
-                switch code {
-                case 401: result = .failure(StringError(message: "auth expired (HTTP 401)", kind: .unauthorized))
-                case 429:
-                    var msg = "rate limited (HTTP 429)"
-                    let retry = (resp as? HTTPURLResponse)?
-                        .value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
-                    if let retry { msg += ", retry after \(Int(retry))s" }
-                    result = .failure(StringError(message: msg, kind: .rateLimited, retryAfter: retry))
-                case 500...599: result = .failure(StringError(message: "server error (HTTP \(code))"))
-                default:  result = .failure(StringError(message: "HTTP \(code)"))
-                }
-                return
-            }
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                result = .success(obj)
-            } else {
-                result = .failure(StringError(message: "bad JSON in response"))
-            }
-        }
-        task.resume()
-        _ = sem.wait(timeout: .now() + 12)
-        return result
-    }
-
-    // MARK: - Parsing
-
-    private static let isoFrac: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
+    static let statusLineSnapshotURL: URL = {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AIUsageBar", isDirectory: true)
+            .appendingPathComponent("claude-statusline.json")
     }()
-    private static let isoPlain = ISO8601DateFormatter()
+
+    /// Claude Code updates status-line input after activity. If no activity
+    /// has supplied a new snapshot for this long, keep the value visible as
+    /// last-known data but mark it stale instead of trying to refresh it.
+    private static let staleAfter: TimeInterval = 30 * 60
+    private static let logLock = NSLock()
+    private static var lastLogSignature: String?
+
+    private struct StoredStatusLine {
+        var observedAt: Date
+        var rateLimits: [String: Any]
+    }
+
+    static func fetch() -> ClaudeLimits {
+        guard let stored = readStoredStatusLine() else {
+            logStatus(state: "unavailable", observedAt: nil, fiveHour: nil, weekly: nil,
+                      message: "claude: local statusline snapshot unavailable — configure the Claude Code bridge")
+            return ClaudeLimits(state: .unavailable)
+        }
+
+        var limits = ClaudeLimits()
+        limits.fetchedAt = stored.observedAt
+        limits.fiveHour = parseWindow(stored.rateLimits["five_hour"])
+        limits.sevenDay = parseWindow(stored.rateLimits["seven_day"])
+
+        guard limits.fiveHour != nil || limits.sevenDay != nil else {
+            logStatus(state: "unavailable", observedAt: stored.observedAt, fiveHour: nil, weekly: nil,
+                      message: "claude: local statusline snapshot has no rate-limit windows")
+            limits.state = .unavailable
+            return limits
+        }
+
+        let age = Date().timeIntervalSince(stored.observedAt)
+        limits.state = age > staleAfter ? .stale : .ok
+        let message: String
+        switch limits.state {
+        case .ok:
+            message = "claude: local statusline limits — 5h \(pct(limits.fiveHour)) used, weekly \(pct(limits.sevenDay)) used"
+        case .stale:
+            message = "claude: local statusline limits stale — last update \(humanAgo(stored.observedAt))"
+        case .unavailable:
+            message = "claude: local statusline snapshot unavailable"
+        case .error:
+            message = "claude: local statusline limits error"
+        }
+        logStatus(state: stateLabel(limits.state), observedAt: stored.observedAt,
+                  fiveHour: limits.fiveHour, weekly: limits.sevenDay, message: message)
+        return limits
+    }
+
+    /// Entry point used by the Claude Code status-line command. Store only
+    /// rate-limit data, not the rest of Claude Code's session metadata.
+    @discardableResult
+    static func captureStatusLineInput(_ data: Data) -> String {
+        guard let input = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rateLimits = input["rate_limits"] as? [String: Any],
+              rateLimits["five_hour"] is [String: Any] || rateLimits["seven_day"] is [String: Any]
+        else {
+            return "Claude · waiting for limits"
+        }
+
+        let record: [String: Any] = [
+            "observed_at": Date().timeIntervalSince1970,
+            "rate_limits": rateLimits,
+        ]
+        if let encoded = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) {
+            do {
+                let directory = statusLineSnapshotURL.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try encoded.write(to: statusLineSnapshotURL, options: .atomic)
+            } catch {
+                // Keep the status line useful even if the local snapshot cannot
+                // be written; the menu-bar app will show the last good file.
+            }
+        }
+        return statusLineText(rateLimits)
+    }
+
+    private static func readStoredStatusLine() -> StoredStatusLine? {
+        guard let data = try? Data(contentsOf: statusLineSnapshotURL),
+              let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let observed = number(record["observed_at"]),
+              let rateLimits = record["rate_limits"] as? [String: Any]
+        else { return nil }
+        return StoredStatusLine(
+            observedAt: Date(timeIntervalSince1970: observed),
+            rateLimits: rateLimits)
+    }
 
     private static func parseWindow(_ raw: Any?) -> LimitWindow? {
-        guard let d = raw as? [String: Any] else { return nil }
-        guard let util = (d["utilization"] as? Double) ?? (d["utilization"] as? Int).map(Double.init)
+        guard let d = raw as? [String: Any],
+              let used = number(d["used_percentage"] ?? d["used_percent"])
         else { return nil }
-        // The API's resets_at may carry fractional seconds; try both formats,
-        // otherwise the reset row renders "—" forever.
-        let reset = (d["resets_at"] as? String).flatMap { isoFrac.date(from: $0) ?? isoPlain.date(from: $0) }
-        return LimitWindow(usedPercent: util, resetsAt: reset)
+        let reset = number(d["resets_at"]).map(Date.init(timeIntervalSince1970:))
+        return LimitWindow(usedPercent: min(100, max(0, used)), resetsAt: reset)
+    }
+
+    private static func number(_ raw: Any?) -> Double? {
+        (raw as? NSNumber)?.doubleValue
+    }
+
+    private static func pct(_ window: LimitWindow?) -> String {
+        window.map { "\(Int($0.usedPercent))%" } ?? "n/a"
+    }
+
+    private static func stateLabel(_ state: ClaudeLimits.State) -> String {
+        switch state {
+        case .ok: return "ok"
+        case .stale: return "stale"
+        case .unavailable: return "unavailable"
+        case .error: return "error"
+        }
+    }
+
+    private static func logStatus(
+        state: String,
+        observedAt: Date?,
+        fiveHour: LimitWindow?,
+        weekly: LimitWindow?,
+        message: String
+    ) {
+        let signature = "\(state)|\(observedAt?.timeIntervalSince1970 ?? -1)|\(fiveHour?.usedPercent ?? -1)|\(weekly?.usedPercent ?? -1)|\(fiveHour?.resetsAt?.timeIntervalSince1970 ?? -1)|\(weekly?.resetsAt?.timeIntervalSince1970 ?? -1)"
+        logLock.lock()
+        let changed = signature != lastLogSignature
+        if changed { lastLogSignature = signature }
+        logLock.unlock()
+        if changed { appLog(message) }
+    }
+
+    private static func statusLineText(_ rateLimits: [String: Any]) -> String {
+        var parts = ["Claude"]
+        if let window = parseWindow(rateLimits["five_hour"]) {
+            parts.append("5h \(Int(window.usedPercent))%")
+        }
+        if let window = parseWindow(rateLimits["seven_day"]) {
+            parts.append("7d \(Int(window.usedPercent))%")
+        }
+        return parts.joined(separator: " · ")
     }
 }

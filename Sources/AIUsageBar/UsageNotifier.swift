@@ -30,7 +30,27 @@ final class UsageNotifier {
         checkWindow(key: "codex-week", name: "Codex weekly window", window: snap.codexLimits?.secondary, warnBelow: warnBelow)
         checkWindow(key: "antigravity-5h", name: "Antigravity 5-hour window", window: snap.antigravity?.fiveHour, warnBelow: warnBelow)
         checkWindow(key: "antigravity-week", name: "Antigravity weekly window", window: snap.antigravity?.weekly, warnBelow: warnBelow)
+        checkLargeSession(provider: "Claude", sessions: snap.claude?.sessions ?? [])
+        checkLargeSession(provider: "Codex", sessions: snap.codex?.sessions ?? [])
         checkBudget(snap)
+    }
+
+    private func checkLargeSession(provider: String, sessions: [SessionActivity]) {
+        let settings = AppSettings.shared
+        guard settings.sessionAlertEnabled, settings.sessionAlertThreshold > 0,
+              let largest = sessions.max(by: { $0.tokenTotal < $1.tokenTotal })
+        else { return }
+        let key = "large-session-\(provider.lowercased())-\(largest.id)"
+        let isLarge = Double(largest.tokenTotal) >= settings.sessionAlertThreshold
+        if isLarge, !firedKeys.contains(key) {
+            firedKeys.insert(key)
+            notify(
+                id: key,
+                title: "Large \(provider) session",
+                body: "\(formatTokens(largest.tokenTotal)) tokens · estimated \(formatUSD(largest.estimatedCostUSD))")
+        } else if !isLarge {
+            firedKeys.remove(key)
+        }
     }
 
     private func checkWindow(key: String, name: String, window: LimitWindow?, warnBelow: Double) {

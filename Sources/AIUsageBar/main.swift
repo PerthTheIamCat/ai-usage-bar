@@ -17,19 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private var animationTimer: Timer?
     private var animationPhase: CGFloat = 0
-    // Last successful Claude limits, reused between limit polls and when a
-    // poll is rate-limited (429) so the display holds steady. Persisted to
-    // UserDefaults so a relaunch still has data while the first fetch runs
-    // (or is rate limited).
+    // Last successful Claude limits, reused while the local statusLine
+    // snapshot is stale or unavailable. Persisted to UserDefaults so a
+    // relaunch still has a useful last-known reading.
     private var lastGoodClaude: ClaudeLimits? {
         didSet { persistLastGoodClaude() }
     }
-    // The usage API rate-limits aggressively, so poll it far less often than
-    // the (free, local) token counts, and back off further on 429.
-    private var nextClaudeFetch = Date.distantPast
-    private let claudePollOK: TimeInterval = 300
-    private let claudePollBackoff: TimeInterval = 600
-    private var manualRefresh = false
     // 7-/30-day cost aggregates are much heavier to compute than the
     // today-only reads (scans up to 30 days of logs), so they're recomputed
     // on their own slow cadence and cached like lastGoodClaude above.
@@ -37,26 +30,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastGoodDailyTrend: DailyTrend?
     private var nextPeriodStatsAt = Date.distantPast
     private let periodStatsInterval: TimeInterval = 30 * 60
-    // A limits fetch can block for a long time on the keychain-permission
-    // dialog; never start a second one while the first is still out, or every
-    // 60s tick stacks another password prompt behind the dialog.
-    private var limitsFetchInFlight = false
-    // Server-imposed 429 window. Nothing may fetch before it — not even ⌘R —
-    // and it persists across relaunches so a restart doesn't burn another hit.
-    private static let rateLimitedUntilKey = "claudeRateLimitedUntil"
-    private var rateLimitedUntil: Date? {
-        get {
-            let t = UserDefaults.standard.double(forKey: Self.rateLimitedUntilKey)
-            return t > 0 ? Date(timeIntervalSince1970: t) : nil
-        }
-        set {
-            if let newValue {
-                UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: Self.rateLimitedUntilKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: Self.rateLimitedUntilKey)
-            }
-        }
-    }
     // Last applied snapshot, re-rendered instantly when a setting changes.
     private var lastSnapshot: UsageSnapshot?
     // When the periodic refresh timer next fires, for the countdown ring.
@@ -122,6 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onRefresh: { [weak self] in self?.refreshClicked() },
             onCheckForUpdates: { [weak self] in self?.updaterController.checkForUpdates(nil) },
             onExportReport: { [weak self] in self?.copyUsageReport() },
+            onExportJSON: { [weak self] in self?.copyUsageJSON() },
+            onExportCSV: { [weak self] in self?.copyUsageCSV() },
+            onSaveCSV: { [weak self] in self?.saveUsageCSV() },
             onSettings: { [weak self] in self?.settingsClicked() },
             onQuit: { [weak self] in self?.quitClicked() }
         )
@@ -142,7 +118,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func refreshClicked() {
-        manualRefresh = true   // force a limits fetch on explicit Refresh Now
         refresh()
     }
     @objc private func settingsClicked() {
@@ -158,8 +133,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appLog("exported usage report to clipboard")
     }
 
-    /// Cheap Date compare on every tick; the actual network call only fires
-    /// once every ~6h (or never, if the user turned auto-fetch off).
+    private func copyUsageJSON() {
+        let json = UsageReport.generateJSON(viewModel.snapshot)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(json, forType: .string)
+        appLog("exported JSON usage report to clipboard")
+    }
+
+    private func copyUsageCSV() {
+        let csv = UsageReport.generateCSV(viewModel.snapshot)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(csv, forType: .string)
+        appLog("exported CSV usage report to clipboard")
+    }
+
+    private func saveUsageCSV() {
+        let panel = NSSavePanel()
+        panel.title = "Export AI Usage CSV"
+        panel.nameFieldStringValue = "ai-usage-\(Date().formatted(.dateTime.year().month().day())).csv"
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try UsageReport.generateCSV(self?.viewModel.snapshot ?? UsageSnapshot())
+                    .write(to: url, atomically: true, encoding: .utf8)
+                appLog("exported CSV usage report to \(url.lastPathComponent)")
+            } catch {
+                appLog("CSV export failed — \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Cheap Date compare on every tick; the Claude statusLine snapshot is
+    /// local, while the exchange-rate fetch has its own slow cadence.
     private func maybeRefreshExchangeRate() {
         let s = AppSettings.shared
         guard s.thbAutoFetch else { return }
@@ -175,21 +180,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refresh() {
         maybeRefreshExchangeRate()
         nextRefreshAt = Date().addingTimeInterval(refreshInterval)
-        let inPenaltyBox = Date() < (rateLimitedUntil ?? .distantPast)
-        let doLimits = (manualRefresh || Date() >= nextClaudeFetch)
-            && !limitsFetchInFlight && !inPenaltyBox
-        manualRefresh = false
-        if doLimits { limitsFetchInFlight = true }
         let doPeriodStats = Date() >= nextPeriodStatsAt
         DispatchQueue.global(qos: .utility).async {
-            let snap = UsageReader.snapshot(fetchClaudeLimits: doLimits, includePeriodStats: doPeriodStats)
+            let snap = UsageReader.snapshot(includePeriodStats: doPeriodStats)
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 var snap = snap
-                if doLimits {
-                    self.limitsFetchInFlight = false
-                    self.scheduleNextClaudeFetch(snap.claudeLimits)
-                }
                 if doPeriodStats {
                     self.lastGoodPeriodCosts = snap.periodCosts
                     self.lastGoodDailyTrend = snap.dailyTrend
@@ -203,29 +199,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func scheduleNextClaudeFetch(_ limits: ClaudeLimits?) {
-        let delay: TimeInterval
-        if case .rateLimited(let retryAfter)? = limits?.state {
-            // Honor the server's Retry-After (plus a buffer) — polling sooner
-            // just burns more 429s.
-            delay = max(claudePollBackoff, (retryAfter ?? 0) + 15)
-            rateLimitedUntil = Date().addingTimeInterval(delay)
-            appLog("claude: backing off — next limits fetch in \(Int(delay))s")
-        } else if case .stale? = limits?.state {
-            // Token expired: the CLI will write a fresh one to the keychain on
-            // its next refresh cycle. Recheck every poll tick so the display
-            // recovers within a minute instead of five. We never refresh the
-            // token ourselves — refresh tokens are single-use, and racing the
-            // CLI for one would log the user out of Claude Code.
-            delay = refreshInterval
-            rateLimitedUntil = nil
-        } else {
-            delay = claudePollOK
-            rateLimitedUntil = nil
-        }
-        nextClaudeFetch = Date().addingTimeInterval(delay)
-    }
-
     // MARK: - Limits persistence
 
     private struct StoredLimits: Codable {
@@ -236,7 +209,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var fetchedAt: Date
     }
 
-    private static let storedLimitsKey = "lastGoodClaudeLimits"
+    // Keep the local-statusline cache separate from values written by older
+    // builds that fetched Claude's HTTP usage endpoint.
+    private static let storedLimitsKey = "lastGoodClaudeLimits.localStatusLine"
 
     private func persistLastGoodClaude() {
         guard let l = lastGoodClaude, let at = l.fetchedAt else { return }
@@ -269,34 +244,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Cache good readings; reuse the last good one when this tick skipped the
-    /// fetch (nil) or failed, so the display holds steady. A failure is still
-    /// surfaced as a status note so the user knows what happened. Feeds the
-    /// popover's view model — the popover itself just re-renders reactively.
+    /// local read or failed, so the display holds steady. A stale/unavailable
+    /// source is still surfaced as a status note. Feeds the popover's view
+    /// model — the popover itself just re-renders reactively.
     private func apply(_ snap: UsageSnapshot) {
         lastSnapshot = snap
         var snap = snap
-        var claudeAPIProblem: String?
+        var claudeLimitsProblem: String?
         if let cl = snap.claudeLimits {
             switch cl.state {
             case .ok:
                 lastGoodClaude = cl
-            case .rateLimited(let retryAfter):
-                claudeAPIProblem = "Usage API rate limited (HTTP 429)"
-                if let retryAfter {
-                    claudeAPIProblem! += " · retry in \(humanDuration(retryAfter))"
-                }
+            case .stale:
+                claudeLimitsProblem = "Claude statusline data is stale — use Claude Code to update it"
+                if let cached = lastGoodClaude { snap.claudeLimits = cached }
+            case .unavailable:
+                claudeLimitsProblem = "Claude statusline bridge is not configured yet"
                 if let cached = lastGoodClaude { snap.claudeLimits = cached }
             case .error(let m):
-                claudeAPIProblem = "Usage API failed: \(m)"
+                claudeLimitsProblem = "Claude local limits failed: \(m)"
                 if let cached = lastGoodClaude { snap.claudeLimits = cached }
-            case .stale, .notLoggedIn:
-                break
             }
         } else if snap.claude != nil {
             snap.claudeLimits = lastGoodClaude
-            if let until = rateLimitedUntil, until > Date() {
-                claudeAPIProblem = "Usage API rate limited (HTTP 429) · retry in \(humanDuration(until.timeIntervalSinceNow))"
-            }
         }
 
         // Menu-bar title prefers the tightest (lowest-remaining) live limit;
@@ -307,7 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatusBarTitle(snap)
 
         viewModel.snapshot = snap
-        viewModel.claudeAPIProblem = claudeAPIProblem
+        viewModel.claudeLimitsProblem = claudeLimitsProblem
         viewModel.lastGoodClaudeFetchedAt = lastGoodClaude?.fetchedAt
         viewModel.nextRefreshAt = nextRefreshAt
 
@@ -317,29 +287,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Status bar title
 
     /// `remainingPercent` is nil when the segment has no meaningful percent
-    /// to draw a meter from (e.g. Claude's "login"/"…"/"!" states, or a
+    /// to draw a meter from (e.g. unavailable/error states, or a
     /// token/prompt-count fallback) — those always render as text regardless
     /// of Limit style.
-    private func statusBarPart(for kind: ProviderKind, _ snap: UsageSnapshot) -> (icon: NSImage, text: String, remainingPercent: Double?, warning: Bool)? {
+    private func statusBarPart(for kind: ProviderKind, _ snap: UsageSnapshot) -> (icon: NSImage, text: String, remainingPercent: Double?, warning: Bool, style: LimitStyle?)? {
         guard AppSettings.shared.isShownInMenuBar(kind) else { return nil }
         let warnBelow = AppSettings.shared.warnBelowRemaining
         switch kind {
         case .claude:
             guard snap.claude != nil else { return nil }
             let low = lowestClaudeRemaining(snap)
-            return (BrandIcons.claude, claudeTitleValue(snap), low, (low ?? 100) < warnBelow)
+            return (BrandIcons.claude, claudeTitleValue(snap), low, (low ?? 100) < warnBelow, AppSettings.shared.limitStyle(for: .claude))
         case .codex:
             guard let x = snap.codex else { return nil }
-            if let v = codexTitleValue(snap) { return (BrandIcons.codex, v.text, v.remaining, v.remaining < warnBelow) }
-            return (BrandIcons.codex, formatTokens(x.totalTokens), nil, false)
+            if let v = codexTitleValue(snap) { return (BrandIcons.codex, v.text, v.remaining, v.remaining < warnBelow, AppSettings.shared.limitStyle(for: .codex)) }
+            return (BrandIcons.codex, formatTokens(x.totalTokens), nil, false, AppSettings.shared.limitStyle(for: .codex))
         case .antigravity:
             guard let g = snap.antigravity else { return nil }
-            let windows = [g.fiveHour, g.weekly].compactMap { $0 }
+            let settings = AppSettings.shared
+            let windows = [
+                settings.isLimitWindowShown(.fiveHour, for: .antigravity) ? g.fiveHour : nil,
+                settings.isLimitWindowShown(.weekly, for: .antigravity) ? g.weekly : nil,
+            ].compactMap { $0 }
             let icon = g.isWorking ? BrandIcons.rotated(BrandIcons.gemini, angle: animationPhase) : BrandIcons.gemini
             if let remaining = windows.map(\.remainingPercent).min() {
-                return (icon, AppSettings.shared.displayMode.shortText(remaining: remaining), remaining, remaining < warnBelow)
+                return (icon, settings.displayMode.shortText(remaining: remaining), remaining, remaining < warnBelow, settings.limitStyle(for: .antigravity))
             }
-            return (icon, "\(g.totalPrompts)P", nil, false)
+            return (icon, "\(g.totalPrompts)P", nil, false, settings.limitStyle(for: .antigravity))
         }
     }
 
@@ -362,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Only appears once spend reaches 80% of budget — routine, well-under-
     /// budget usage stays silent rather than adding a permanent segment.
-    private func budgetPart(_ snap: UsageSnapshot) -> (icon: NSImage, text: String, remainingPercent: Double?, warning: Bool)? {
+    private func budgetPart(_ snap: UsageSnapshot) -> (icon: NSImage, text: String, remainingPercent: Double?, warning: Bool, style: LimitStyle?)? {
         guard let spend = currentSpendUSD(snap) else { return nil }
         let budget = AppSettings.shared.budgetAmountUSD
         let fraction = spend / budget
@@ -370,7 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let icon = NSImage(systemSymbolName: "dollarsign.circle.fill", accessibilityDescription: "Budget")
             ?? NSImage(size: NSSize(width: 1, height: 1))
         icon.isTemplate = true
-        return (icon, formatUSD(spend), nil, fraction >= 1.0)
+        return (icon, formatUSD(spend), nil, fraction >= 1.0, nil)
     }
 
     private func updateStatusBarTitle(_ snap: UsageSnapshot) {
@@ -378,15 +352,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let budget = budgetPart(snap) { parts.append(budget) }
         guard let button = statusItem.button else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
-        let style = AppSettings.shared.limitStyle
         let title = NSMutableAttributedString()
         for part in parts {
             if title.length > 0 { title.append(NSAttributedString(string: "   ", attributes: [.font: font])) }
             let color: NSColor = part.warning ? .systemRed : .labelColor
             title.append(BrandIcons.attachment(part.icon, font: font, color: color))
             title.append(NSAttributedString(string: " ", attributes: [.font: font]))
-            if let remaining = part.remainingPercent, style != .percentOnly {
+            if let remaining = part.remainingPercent, let style = part.style, style.showsMeter {
                 title.append(MiniMeter.attachment(remainingPercent: remaining, style: style, font: font, color: color))
+                if style.showsPercent {
+                    title.append(NSAttributedString(string: " " + part.text, attributes: [.font: font, .foregroundColor: color]))
+                }
             } else {
                 title.append(NSAttributedString(string: part.text, attributes: [.font: font, .foregroundColor: color]))
             }
@@ -404,9 +380,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Both windows hidden from the menu bar — fall back to tokens.
             if let c = snap.claude { return formatTokens(c.total) }
             return "—"
-        case .stale: return "login"
-        case .rateLimited: return "…"
-        case .notLoggedIn: return "—"
+        case .stale: return "stale"
+        case .unavailable: return "—"
         case .error: return "!"
         }
     }
@@ -417,8 +392,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let l = snap.claudeLimits, case .ok = l.state else { return nil }
         let s = AppSettings.shared
         var values: [Double] = []
-        if s.showFiveHourInMenuBar, let w = l.fiveHour { values.append(w.remainingPercent) }
-        if s.showWeeklyInMenuBar, let w = l.sevenDay { values.append(w.remainingPercent) }
+        if s.isLimitWindowShown(.fiveHour, for: .claude), let w = l.fiveHour { values.append(w.remainingPercent) }
+        if s.isLimitWindowShown(.weekly, for: .claude), let w = l.sevenDay { values.append(w.remainingPercent) }
         return values.min()
     }
 
@@ -427,8 +402,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Returns nil when even that is missing.
     private func codexTitleValue(_ snap: UsageSnapshot) -> (text: String, remaining: Double)? {
         guard let l = snap.codexLimits else { return nil }
-        if let s = l.secondary, !isExpired(s) {
-            return (AppSettings.shared.displayMode.shortText(remaining: s.remainingPercent), s.remainingPercent)
+        let settings = AppSettings.shared
+        if settings.isLimitWindowShown(.weekly, for: .codex), let s = l.secondary, !isExpired(s) {
+            return (settings.displayMode.shortText(remaining: s.remainingPercent), s.remainingPercent)
+        }
+        if settings.isLimitWindowShown(.fiveHour, for: .codex), let s = l.primary, !isExpired(s) {
+            return (settings.displayMode.shortText(remaining: s.remainingPercent), s.remainingPercent)
         }
         return nil
     }
@@ -436,6 +415,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func isExpired(_ w: LimitWindow) -> Bool {
         if let r = w.resetsAt { return r <= Date() }
         return false
+    }
+}
+
+if CommandLine.arguments.contains("--claude-statusline") {
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    print(ClaudeLimitsReader.captureStatusLineInput(input))
+    exit(0)
+}
+
+func dumpSessionActivities(_ provider: String, _ sessions: [SessionActivity]) {
+    guard !sessions.isEmpty else { return }
+    print("\(provider) sessions today:")
+    for session in sessions {
+        let skills = formatSessionActivityCounts(session.skills)
+        let skillText = skills.isEmpty
+            ? "—"
+            : skills + (session.inferredSkills.isEmpty ? "" : " (inferred)")
+        let tools = formatSessionActivityCounts(session.tools).isEmpty
+            ? "—"
+            : formatSessionActivityCounts(session.tools)
+        let time = session.lastActivityAt?.formatted(date: .omitted, time: .shortened) ?? "—"
+        print("  \(session.id.prefix(12)) · \(time) · \(formatTokens(session.tokenTotal)) tokens · skills=\(skillText) · tools=\(tools)")
     }
 }
 
@@ -451,6 +452,7 @@ if CommandLine.arguments.contains("--dump") {
                 .joined(separator: ", ")
             print("Claude skills today (most recent first): \(skills)")
         }
+        dumpSessionActivities("Claude", c.sessions)
     } else {
         print("Claude: not detected")
     }
@@ -461,14 +463,14 @@ if CommandLine.arguments.contains("--dump") {
         }
         switch l.state {
         case .ok: print("Claude limits: \(w("5h", l.fiveHour))  \(w("weekly", l.sevenDay))")
-        case .rateLimited: print("Claude limits: rate limited (429) — retry later")
-        case .stale: print("Claude limits: login expired (run claude to sign in)")
-        case .notLoggedIn: print("Claude limits: not logged in")
+        case .stale: print("Claude limits: stale — use Claude Code to update the statusline")
+        case .unavailable: print("Claude limits: unavailable — configure the Claude Code statusline bridge")
         case .error(let m): print("Claude limits: error \(m)")
         }
     }
     if let x = snap.codex {
         print("Codex: total=\(formatTokens(x.totalTokens)) in=\(x.inputTokens) cached=\(x.cachedInputTokens) out=\(x.outputTokens) reasoning=\(x.reasoningTokens) sessions=\(x.sessionCount)")
+        dumpSessionActivities("Codex", x.sessions)
     } else {
         print("Codex: not detected")
     }

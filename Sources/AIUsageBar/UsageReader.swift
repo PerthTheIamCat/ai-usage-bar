@@ -8,23 +8,41 @@ enum UsageReader {
     static let antigravityDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".gemini/antigravity-cli")
 
-    /// - Parameter fetchClaudeLimits: when false, skips the Claude usage API
-    ///   call (leaving `claudeLimits == nil`) so the caller can throttle that
-    ///   endpoint independently of the cheap local token-count reads.
+    private static let codexLogLock = NSLock()
+    private static var lastCodexLogSignature: String?
+    private static let sessionCacheLock = NSLock()
+    private static var claudeSessionCache: (fingerprint: String, value: [SessionActivity])?
+    private static var codexSessionCache: (fingerprint: String, value: [SessionActivity])?
+
     /// - Parameter includePeriodStats: when true, also computes the 7-/30-day
     ///   cost aggregates (see `periodCosts()`). Off by default since it's
     ///   meaningfully heavier than the today-only reads; the caller throttles
     ///   it on its own slower cadence.
-    static func snapshot(fetchClaudeLimits: Bool = true, includePeriodStats: Bool = false) -> UsageSnapshot {
+    static func snapshot(includePeriodStats: Bool = false) -> UsageSnapshot {
         let fm = FileManager.default
         var snap = UsageSnapshot()
         if fm.fileExists(atPath: claudeDir.path) {
             snap.claude = readClaudeToday()
-            if fetchClaudeLimits { snap.claudeLimits = ClaudeLimitsReader.fetch() }
+        }
+        // This is a local snapshot supplied by Claude Code's statusLine
+        // bridge, so reading it is cheap and safe on every refresh tick.
+        // Avoid creating a noisy "bridge unavailable" log on machines that
+        // do not have Claude Code at all.
+        if fm.fileExists(atPath: claudeDir.path)
+            || fm.fileExists(atPath: ClaudeLimitsReader.statusLineSnapshotURL.path)
+        {
+            snap.claudeLimits = ClaudeLimitsReader.fetch()
         }
         if fm.fileExists(atPath: codexDir.path) {
-            snap.codex = readCodexToday()
-            snap.codexLimits = codexLimits()
+            let codexUsage = readCodexToday()
+            let codexLimits = codexLimits()
+            snap.codex = codexUsage
+            snap.codexLimits = codexLimits
+            logCodexSnapshot(codexUsage, limits: codexLimits)
+        } else {
+            logCodexStatus(
+                "codex: local sessions directory not found — expected ~/.codex/sessions",
+                signature: "missing")
         }
         if fm.fileExists(atPath: antigravityDir.path) {
             snap.antigravity = readAntigravityToday()
@@ -36,6 +54,41 @@ enum UsageReader {
         }
         snap.updatedAt = Date()
         return snap
+    }
+
+    /// Codex data is read from local JSONL files rather than an API, so it
+    /// used to be invisible in the diagnostics log. Log only when the local
+    /// reading changes to keep the log useful without adding a line every
+    /// minute forever.
+    private static func logCodexSnapshot(_ usage: CodexUsage, limits: CodexLimits?) {
+        let limitSummary: String
+        let primaryUsed = limits?.primary.map { Int($0.usedPercent) } ?? -1
+        let secondaryUsed = limits?.secondary.map { Int($0.usedPercent) } ?? -1
+        let asOf = limits?.asOf?.timeIntervalSince1970 ?? -1
+        if let limits {
+            let windows = [
+                limits.primary.map { "5h \(Int($0.usedPercent))%" },
+                limits.secondary.map { "weekly \(Int($0.usedPercent))%" },
+            ].compactMap { $0 }.joined(separator: ", ")
+            limitSummary = windows.isEmpty
+                ? "limits=empty"
+                : "limits=\(windows) as of \(humanAgo(limits.asOf))"
+        } else {
+            limitSummary = "limits=not found"
+        }
+        let signature = "\(usage.inputTokens)|\(usage.cachedInputTokens)|\(usage.outputTokens)|\(usage.reasoningTokens)|\(usage.totalTokens)|\(usage.sessionCount)|\(primaryUsed)|\(secondaryUsed)|\(asOf)"
+        logCodexStatus(
+            "codex: local logs read — \(formatTokens(usage.totalTokens)) tokens, \(usage.sessionCount) sessions, \(limitSummary)",
+            signature: signature)
+    }
+
+    private static func logCodexStatus(_ message: String, signature: String) {
+        codexLogLock.lock()
+        let changed = signature != lastCodexLogSignature
+        if changed { lastCodexLogSignature = signature }
+        codexLogLock.unlock()
+        guard changed else { return }
+        appLog(message)
     }
 
     // MARK: - Shared helpers
@@ -188,7 +241,8 @@ enum UsageReader {
 
     private static func readClaudeToday() -> ClaudeUsage {
         readClaude(matching: { isTodayLocal(isoTimestamp: $0) },
-                   files: filesModifiedToday(under: claudeDir, ext: "jsonl"))
+                   files: filesModifiedToday(under: claudeDir, ext: "jsonl"),
+                   includeSessions: true)
     }
 
     /// 7-/30-day aggregate for the period-cost rows. `daysBack` is inclusive
@@ -198,7 +252,11 @@ enum UsageReader {
                    files: filesModified(under: claudeDir, ext: "jsonl", sinceDaysAgo: daysBack))
     }
 
-    private static func readClaude(matching isIncluded: (String) -> Bool, files: [URL]) -> ClaudeUsage {
+    private static func readClaude(
+        matching isIncluded: (String) -> Bool,
+        files: [URL],
+        includeSessions: Bool = false
+    ) -> ClaudeUsage {
         var usage = ClaudeUsage()
         // Dedupe streamed/rewritten entries: same request may appear multiple
         // times; keep the last occurrence per key.
@@ -260,7 +318,128 @@ enum UsageReader {
             }
         }
         usage.sessionCount = sessions.count
+        if includeSessions {
+            usage.sessions = readClaudeSessions(matching: isIncluded, files: files)
+        }
         return usage
+    }
+
+    private struct ClaudeSessionRequest {
+        var inputTokens: Int
+        var outputTokens: Int
+        var cacheWrite: Int
+        var cacheRead: Int
+        var model: String?
+        var timestamp: String
+        var skills: [String]
+        var tools: [String]
+        var costUSD: Double
+    }
+
+    /// Reads only today's session metadata and tool names. Prompt and tool
+    /// input content is deliberately ignored and never enters the model.
+    private static func readClaudeSessions(
+        matching isIncluded: (String) -> Bool,
+        files: [URL]
+    ) -> [SessionActivity] {
+        let fingerprint = filesFingerprint(files)
+        sessionCacheLock.lock()
+        if let cached = claudeSessionCache, cached.fingerprint == fingerprint {
+            sessionCacheLock.unlock()
+            return cached.value
+        }
+        sessionCacheLock.unlock()
+
+        var result: [SessionActivity] = []
+
+        for file in files {
+            let sessionID = file.deletingPathExtension().lastPathComponent
+            var requests: [String: ClaudeSessionRequest] = [:]
+
+            forEachLine(of: file) { line in
+                guard let data = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      (obj["type"] as? String) == "assistant",
+                      let timestamp = obj["timestamp"] as? String,
+                      isIncluded(timestamp),
+                      let message = obj["message"] as? [String: Any]
+                else { return }
+
+                let skills = skillInvocations(in: message)
+                let tools = toolInvocations(in: message)
+                let tokenUsage = message["usage"] as? [String: Any] ?? [:]
+                guard message["usage"] is [String: Any] || !skills.isEmpty || !tools.isEmpty
+                else { return }
+
+                let key = (obj["requestId"] as? String)
+                    ?? (message["id"] as? String)
+                    ?? (obj["uuid"] as? String)
+                    ?? UUID().uuidString
+                requests[key] = ClaudeSessionRequest(
+                    inputTokens: tokenUsage["input_tokens"] as? Int ?? 0,
+                    outputTokens: tokenUsage["output_tokens"] as? Int ?? 0,
+                    cacheWrite: tokenUsage["cache_creation_input_tokens"] as? Int ?? 0,
+                    cacheRead: tokenUsage["cache_read_input_tokens"] as? Int ?? 0,
+                    model: message["model"] as? String,
+                    timestamp: timestamp,
+                    skills: skills,
+                    tools: tools,
+                    costUSD: Pricing.claudeModelCostUSD(
+                        ModelTokens(
+                            input: tokenUsage["input_tokens"] as? Int ?? 0,
+                            output: tokenUsage["output_tokens"] as? Int ?? 0,
+                            cacheWrite: tokenUsage["cache_creation_input_tokens"] as? Int ?? 0,
+                            cacheRead: tokenUsage["cache_read_input_tokens"] as? Int ?? 0),
+                        model: message["model"] as? String ?? ""))
+            }
+
+            guard !requests.isEmpty else { continue }
+            var session = SessionActivity(id: sessionID)
+            for request in requests.values {
+                let date = parseISO(request.timestamp)
+                let isLatest: Bool
+                if let date, let last = session.lastActivityAt {
+                    isLatest = date >= last
+                } else {
+                    isLatest = true
+                }
+                if let date {
+                    if session.startedAt == nil || date < session.startedAt! {
+                        session.startedAt = date
+                    }
+                    if session.lastActivityAt == nil || date > session.lastActivityAt! {
+                        session.lastActivityAt = date
+                    }
+                }
+                session.tokenTotal += request.inputTokens + request.outputTokens
+                    + request.cacheWrite + request.cacheRead
+                session.estimatedCostUSD += request.costUSD
+                if isLatest {
+                    session.model = request.model
+                }
+                for skill in request.skills {
+                    session.skills[skill, default: 0] += 1
+                }
+                for tool in request.tools {
+                    session.tools[tool, default: 0] += 1
+                }
+                let attributedCallCount = request.skills.count + request.tools.count
+                if attributedCallCount > 0 {
+                    let share = request.costUSD / Double(attributedCallCount)
+                    for skill in request.skills { session.skillCosts[skill, default: 0] += share }
+                    for tool in request.tools { session.toolCosts[tool, default: 0] += share }
+                }
+            }
+            result.append(session)
+        }
+
+        let sorted = result.sorted {
+            ($0.lastActivityAt ?? .distantPast) > ($1.lastActivityAt ?? .distantPast)
+        }
+        sessionCacheLock.lock()
+        claudeSessionCache = (fingerprint, sorted)
+        sessionCacheLock.unlock()
+        return sorted
     }
 
     /// Names of any Claude Code `Skill` tool calls in one assistant message's
@@ -275,6 +454,20 @@ enum UsageReader {
                   let skill = input["skill"] as? String
             else { return nil }
             return skill
+        }
+    }
+
+    /// Tool names are useful at session level, while Skill calls get their own
+    /// named bucket and are therefore excluded from this list.
+    private static func toolInvocations(in message: [String: Any]) -> [String] {
+        guard let content = message["content"] as? [Any] else { return [] }
+        return content.compactMap { item in
+            guard let block = item as? [String: Any],
+                  block["type"] as? String == "tool_use",
+                  let name = block["name"] as? String,
+                  name != "Skill"
+            else { return nil }
+            return name
         }
     }
 
@@ -354,7 +547,8 @@ enum UsageReader {
 
     private static func readCodexToday() -> CodexUsage {
         readCodex(matching: { isTodayLocal(isoTimestamp: $0) },
-                  files: filesModifiedToday(under: codexDir, ext: "jsonl"))
+                  files: filesModifiedToday(under: codexDir, ext: "jsonl"),
+                  includeSessions: true)
     }
 
     /// 7-/30-day aggregate for the period-cost rows (see `readClaude(daysBack:)`).
@@ -363,7 +557,11 @@ enum UsageReader {
                   files: filesModified(under: codexDir, ext: "jsonl", sinceDaysAgo: daysBack))
     }
 
-    private static func readCodex(matching isIncluded: (String) -> Bool, files: [URL]) -> CodexUsage {
+    private static func readCodex(
+        matching isIncluded: (String) -> Bool,
+        files: [URL],
+        includeSessions: Bool = false
+    ) -> CodexUsage {
         var usage = CodexUsage()
         for file in files {
             // total_token_usage is cumulative per session; last event wins.
@@ -389,7 +587,160 @@ enum UsageReader {
             usage.totalTokens += t["total_tokens"] ?? 0
             usage.sessionCount += 1
         }
+        if includeSessions {
+            usage.sessions = readCodexSessions(matching: isIncluded, files: files)
+        }
         return usage
+    }
+
+    /// Codex has emitted both `function_call` and `custom_tool_call` records
+    /// across CLI/Desktop versions, so accept both shapes. Skill names are
+    /// intentionally marked as inferred because Codex does not currently
+    /// emit a dedicated skill invocation event in these local logs.
+    private static func readCodexSessions(
+        matching isIncluded: (String) -> Bool,
+        files: [URL]
+    ) -> [SessionActivity] {
+        let fingerprint = filesFingerprint(files)
+        sessionCacheLock.lock()
+        if let cached = codexSessionCache, cached.fingerprint == fingerprint {
+            sessionCacheLock.unlock()
+            return cached.value
+        }
+        sessionCacheLock.unlock()
+
+        var result: [SessionActivity] = []
+
+        for file in files {
+            var sessionID = file.deletingPathExtension().lastPathComponent
+            var workspace: String?
+            var model: String?
+            var startedAt: Date?
+            var lastActivityAt: Date?
+            var lastTotals: [String: Int]?
+            var tools: [String: Int] = [:]
+            var skills: [String: Int] = [:]
+            var inferredSkills: Set<String> = []
+
+            forEachLine(of: file) { line in
+                guard let data = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let timestamp = obj["timestamp"] as? String,
+                      let date = parseISO(timestamp),
+                      let payload = obj["payload"] as? [String: Any]
+                else { return }
+
+                if (obj["type"] as? String) == "session_meta" {
+                    if let id = payload["id"] as? String, !id.isEmpty { sessionID = id }
+                    if let cwd = payload["cwd"] as? String, !cwd.isEmpty {
+                        workspace = URL(fileURLWithPath: cwd).lastPathComponent
+                    }
+                    model = payload["model"] as? String ?? model
+                }
+
+                guard isIncluded(timestamp) else { return }
+                if startedAt == nil || date < startedAt! { startedAt = date }
+                if lastActivityAt == nil || date > lastActivityAt! { lastActivityAt = date }
+
+                if (obj["type"] as? String) == "event_msg",
+                   (payload["type"] as? String) == "token_count",
+                   let info = payload["info"] as? [String: Any],
+                   let total = info["total_token_usage"] as? [String: Any]
+                {
+                    lastTotals = total.compactMapValues { $0 as? Int }
+                }
+
+                guard (obj["type"] as? String) == "response_item",
+                      let payloadType = payload["type"] as? String,
+                      payloadType == "function_call" || payloadType == "custom_tool_call",
+                      let name = payload["name"] as? String,
+                      !name.isEmpty
+                else { return }
+
+                tools[name, default: 0] += 1
+                let argumentText = toolArgumentText(from: payload)
+                for skill in inferredCodexSkills(in: argumentText) {
+                    skills[skill, default: 0] += 1
+                    inferredSkills.insert(skill)
+                }
+            }
+
+            guard lastTotals != nil || !tools.isEmpty else { continue }
+            var tokenUsage = CodexUsage()
+            tokenUsage.inputTokens = lastTotals?["input_tokens"] ?? 0
+            tokenUsage.cachedInputTokens = lastTotals?["cached_input_tokens"] ?? 0
+            tokenUsage.outputTokens = lastTotals?["output_tokens"] ?? 0
+            tokenUsage.reasoningTokens = lastTotals?["reasoning_output_tokens"] ?? 0
+            tokenUsage.totalTokens = lastTotals?["total_tokens"] ?? 0
+            let estimatedCost = Pricing.codexCostUSD(tokenUsage)
+            let toolInvocationCount = tools.values.reduce(0, +)
+            let skillInvocationCount = skills.values.reduce(0, +)
+            let toolCosts = Dictionary(uniqueKeysWithValues: tools.map { name, count in
+                (name, estimatedCost * Double(count) / Double(max(1, toolInvocationCount)))
+            })
+            let skillCosts = Dictionary(uniqueKeysWithValues: skills.map { name, count in
+                (name, estimatedCost * Double(count) / Double(max(1, skillInvocationCount)))
+            })
+            let session = SessionActivity(
+                id: sessionID,
+                startedAt: startedAt,
+                lastActivityAt: lastActivityAt,
+                tokenTotal: tokenUsage.totalTokens,
+                estimatedCostUSD: estimatedCost,
+                model: model,
+                workspace: workspace,
+                skills: skills,
+                skillCosts: skillCosts,
+                inferredSkills: inferredSkills,
+                tools: tools,
+                toolCosts: toolCosts)
+            result.append(session)
+        }
+
+        let sorted = result.sorted {
+            ($0.lastActivityAt ?? .distantPast) > ($1.lastActivityAt ?? .distantPast)
+        }
+        sessionCacheLock.lock()
+        codexSessionCache = (fingerprint, sorted)
+        sessionCacheLock.unlock()
+        return sorted
+    }
+
+    private static func filesFingerprint(_ files: [URL]) -> String {
+        files.map { file in
+            let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let modified = values?.contentModificationDate?.timeIntervalSince1970 ?? -1
+            let size = values?.fileSize ?? -1
+            return "\(file.path)|\(modified)|\(size)"
+        }
+        .joined(separator: "|")
+    }
+
+    private static func toolArgumentText(from payload: [String: Any]) -> String {
+        for key in ["input", "arguments"] {
+            if let text = payload[key] as? String { return text }
+            if let value = payload[key],
+               JSONSerialization.isValidJSONObject(value),
+               let data = try? JSONSerialization.data(withJSONObject: value),
+               let text = String(data: data, encoding: .utf8)
+            {
+                return text
+            }
+        }
+        return ""
+    }
+
+    private static let codexSkillRegex = try? NSRegularExpression(
+        pattern: #"(?:^|/)([A-Za-z0-9._-]+)/SKILL\.md(?:$|[^A-Za-z0-9._-])"#,
+        options: [.caseInsensitive])
+
+    private static func inferredCodexSkills(in text: String) -> [String] {
+        guard !text.isEmpty, let regex = codexSkillRegex else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let skillRange = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[skillRange])
+        }
     }
 
     private static func readAntigravityToday() -> AntigravityUsage {

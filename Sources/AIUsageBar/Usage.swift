@@ -8,6 +8,45 @@ struct ModelTokens {
     var cacheRead = 0
 }
 
+/// A privacy-preserving summary of one local CLI session. It intentionally
+/// stores names/counts and timestamps, not prompt, response, or tool input
+/// content.
+struct SessionActivity: Identifiable {
+    let id: String
+    var startedAt: Date?
+    var lastActivityAt: Date?
+    var tokenTotal = 0
+    var estimatedCostUSD = 0.0
+    var model: String?
+    var workspace: String?
+    var skills: [String: Int] = [:]
+    var skillCosts: [String: Double] = [:]
+    /// Codex skill names are inferred from tool arguments that reference a
+    /// skill's SKILL.md; Claude records explicit Skill tool calls.
+    var inferredSkills: Set<String> = []
+    var tools: [String: Int] = [:]
+    var toolCosts: [String: Double] = [:]
+
+    init(id: String, startedAt: Date? = nil, lastActivityAt: Date? = nil,
+         tokenTotal: Int = 0, estimatedCostUSD: Double = 0, model: String? = nil,
+         workspace: String? = nil, skills: [String: Int] = [:],
+         skillCosts: [String: Double] = [:], inferredSkills: Set<String> = [],
+         tools: [String: Int] = [:], toolCosts: [String: Double] = [:]) {
+        self.id = id
+        self.startedAt = startedAt
+        self.lastActivityAt = lastActivityAt
+        self.tokenTotal = tokenTotal
+        self.estimatedCostUSD = estimatedCostUSD
+        self.model = model
+        self.workspace = workspace
+        self.skills = skills
+        self.skillCosts = skillCosts
+        self.inferredSkills = inferredSkills
+        self.tools = tools
+        self.toolCosts = toolCosts
+    }
+}
+
 struct ClaudeUsage {
     var inputTokens = 0
     var outputTokens = 0
@@ -22,6 +61,8 @@ struct ClaudeUsage {
     /// Most recent invocation time per skill — pairs with `skillCounts` for
     /// a "what did I just use" view, not just an aggregate total.
     var skillLastUsed: [String: Date] = [:]
+    /// Session-level names/counts parsed from today's local JSONL files.
+    var sessions: [SessionActivity] = []
 
     var total: Int { inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens }
 }
@@ -33,6 +74,8 @@ struct CodexUsage {
     var reasoningTokens = 0
     var totalTokens = 0
     var sessionCount = 0
+    /// Session-level tool calls parsed from today's local JSONL files.
+    var sessions: [SessionActivity] = []
 }
 
 struct AntigravityUsage {
@@ -123,4 +166,26 @@ func formatTokens(_ n: Int) -> String {
     case ..<1_000_000_000: return String(format: "%.2fM", v / 1_000_000)
     default: return String(format: "%.2fB", v / 1_000_000_000)
     }
+}
+
+func formatSessionActivityCounts(_ counts: [String: Int]) -> String {
+    counts
+        .sorted { lhs, rhs in
+            lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
+        }
+        .map { $0.value > 1 ? "\($0.key) ×\($0.value)" : $0.key }
+        .joined(separator: ", ")
+}
+
+func formatSessionActivityDetails(_ counts: [String: Int], costs: [String: Double]) -> String {
+    counts
+        .sorted { lhs, rhs in
+            lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
+        }
+        .map { item in
+            let count = item.value > 1 ? " ×\(item.value)" : ""
+            let cost = costs[item.key].map { " · ~\(formatUSD($0))" } ?? ""
+            return item.key + count + cost
+        }
+        .joined(separator: ", ")
 }

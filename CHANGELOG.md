@@ -2,6 +2,20 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.9.0] - 2026-08-02
+
+### Added
+
+- Providers settings now covers Claude Code, Codex, and Antigravity with
+  independent menu-bar/popover visibility, limit-window choices, detail rows,
+  ordering, and six menu-bar styles (including combined meter + percentage
+  styles).
+- Session explorer rows show estimated cost per session and associated
+  skill/tool costs. Reports can be copied as Markdown, JSON, or CSV, or saved
+  as a CSV file.
+- Optional large-session notifications, session ID/workspace privacy toggles,
+  and fingerprint-based session-summary caching.
+
 ## [0.8.0] - 2026-07-25
 
 ### Changed
