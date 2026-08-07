@@ -160,78 +160,299 @@ struct LimitRow: View {
 @ViewBuilder
 func limitRowOrNote(_ name: String, _ w: LimitWindow) -> some View {
     if let r = w.resetsAt, r <= Date() {
-        NoteText(text: "\(name): window reset — reopen CLI for fresh reading")
+        NoteText(text: "\(name): window reset — use Claude Code or the Desktop app for a fresh reading")
     } else {
         LimitRow(name: name, window: w)
     }
 }
 
-private struct SessionActivityRow: View {
-    let session: SessionActivity
-    @ObservedObject private var settings = AppSettings.shared
-    @State private var isExpanded = false
+/// Shown when neither the Claude Code statusLine bridge nor the Desktop
+/// app's local usage file has a reading yet. The Desktop app needs no setup
+/// — this only offers to wire up the CLI bridge, and only when it isn't
+/// already configured.
+struct ClaudeStatusLineSetupPrompt: View {
+    @State private var setupState = ClaudeStatusLineSetup.currentState()
+    @State private var resultMessage: String?
+    @State private var resultIsError = false
 
-    private var shortID: String {
-        settings.showSessionIdentifiers ? String(session.id.prefix(12)) : "hidden"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch setupState {
+            case .configured:
+                NoteText(text: "Status line bridge is configured — open Claude Code once to send a reading, or use the Desktop app.")
+            case .notConfigured:
+                NoteText(text: "No local Claude reading yet. The Desktop app needs no setup — open it and use Claude once. For Claude Code (CLI), set up the status line bridge:")
+                Button("Set Up Status Line Bridge") {
+                    let result = ClaudeStatusLineSetup.install()
+                    switch result {
+                    case .success:
+                        resultMessage = "Bridge installed. Restart Claude Code, then send a message to get a reading."
+                        resultIsError = false
+                        setupState = ClaudeStatusLineSetup.currentState()
+                    case .failure(let error):
+                        resultMessage = error.errorDescription
+                        resultIsError = true
+                    }
+                }
+                .font(.system(size: 11))
+            }
+            if let resultMessage {
+                Text(resultMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(resultIsError ? Color.red : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
+}
 
-    private var timeText: String {
-        session.lastActivityAt?.formatted(date: .omitted, time: .shortened) ?? "—"
+// MARK: - Overview (default landing pane — "how much do I have left")
+
+/// A slimmer limit row for cards: label, thin bar, and percent on one line,
+/// no reset caption. `ProviderSummaryCard` shows reset time once for the
+/// tighter of the two windows instead of repeating it per row.
+private struct MiniLimitRow: View {
+    let label: String
+    let window: LimitWindow
+    @ObservedObject private var settings = AppSettings.shared
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 46, alignment: .leading)
+            LimitBarRepresentable(remainingPercent: window.remainingPercent)
+                .frame(height: 5)
+            // The meter already fills according to the display mode, so the
+            // number has to follow it — printing "left" next to a bar drawn
+            // as "used" made the same window read 11% here and 89% in the
+            // menu bar.
+            Text(settings.displayMode.shortText(remaining: window.remainingPercent))
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Color(nsColor: limitColor(window.remainingPercent)))
+                .frame(width: 34, alignment: .trailing)
+        }
+    }
+}
+
+/// One card per detected provider: identity, remaining-capacity bars, and a
+/// single "today" line — nothing else. Tapping opens that provider's full
+/// detail pane (token breakdown, sessions, skills, etc.), which now lives
+/// one click away instead of being the default view.
+private struct ProviderSummaryCard: View {
+    let kind: ProviderKind
+    let title: String
+    let icon: NSImage
+    let iconTint: Color?
+    let fiveHour: LimitWindow?
+    let weekly: LimitWindow?
+    let problem: String?
+    let todayLine: String?
+    let onTap: () -> Void
+
+    private var tightestReset: Date? {
+        [fiveHour, weekly].compactMap { $0 }
+            .min { $0.remainingPercent < $1.remainingPercent }?
+            .resetsAt
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 4) {
-                if !session.skills.isEmpty {
-                    Text(session.inferredSkills.isEmpty ? "Skills · associated est. cost" : "Skills (inferred) · associated est. cost")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text(formatSessionActivityDetails(session.skills, costs: session.skillCosts))
-                        .font(.system(size: 11))
-                        .fixedSize(horizontal: false, vertical: true)
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(nsImage: icon)
+                        .renderingMode(.template)
+                        .resizable()
+                        .frame(width: 16, height: 16)
+                        .foregroundStyle(iconTint ?? Color.primary)
+                    Text(title).font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
                 }
-                if !session.tools.isEmpty {
-                    Text("Tools · associated est. cost")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text(formatSessionActivityDetails(session.tools, costs: session.toolCosts))
-                        .font(.system(size: 11))
-                        .fixedSize(horizontal: false, vertical: true)
+
+                if let problem {
+                    NoteText(text: problem)
+                } else if fiveHour == nil && weekly == nil {
+                    NoteText(text: "No limit data yet")
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let w = fiveHour { MiniLimitRow(label: "5-hour", window: w) }
+                        if let w = weekly { MiniLimitRow(label: "Weekly", window: w) }
+                    }
+                    if let reset = tightestReset {
+                        Text("resets in \(humanReset(reset))")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                if session.skills.isEmpty && session.tools.isEmpty {
-                    NoteText(text: "No Skill/tool calls recorded")
+
+                if let todayLine {
+                    Text(todayLine)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(.bottom, 4)
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text("Session \(shortID)")
-                        .font(.system(size: 12, weight: .medium).monospaced())
-                    Spacer()
-                    Text(timeText)
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 6) {
-                    if settings.showSessionWorkspace, let workspace = session.workspace, !workspace.isEmpty {
-                        Text(workspace)
-                    }
-                    if let model = session.model, !model.isEmpty {
-                        Text(model)
-                    }
-                    Text("· \(formatTokens(session.tokenTotal)) tokens")
-                    if session.estimatedCostUSD > 0 {
-                        Text("· \(formatUSD(session.estimatedCostUSD))")
-                    }
-                }
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The single lowest-remaining window across every shown provider — the
+/// answer to "how much AI usage do I actually have left right now."
+private struct HeroRemainingCard: View {
+    let providerTitle: String
+    let windowLabel: String
+    let window: LimitWindow
+    @ObservedObject private var settings = AppSettings.shared
+
+    /// The window shown is the same either way — it is the tightest one. Only
+    /// the framing flips, so the headline never contradicts the menu bar.
+    private var shownFraction: Double {
+        let value = settings.displayMode == .used ? 100 - window.remainingPercent : window.remainingPercent
+        return value / 100
+    }
+
+    var body: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 7)
+                Circle()
+                    .trim(from: 0, to: max(0.003, shownFraction))
+                    .stroke(Color(nsColor: limitColor(window.remainingPercent)),
+                            style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Text(settings.displayMode.shortText(remaining: window.remainingPercent))
+                    .font(.system(size: 16, weight: .bold).monospacedDigit())
+            }
+            .frame(width: 60, height: 60)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(settings.displayMode == .used ? "Highest used" : "Lowest remaining")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("\(providerTitle) · \(windowLabel)")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("resets in \(humanReset(window.resetsAt))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+}
+
+struct OverviewPane: View {
+    let snap: UsageSnapshot
+    let claudeLimitsProblem: String?
+    let onSelectProvider: (ProviderKind) -> Void
+    @ObservedObject private var settings = AppSettings.shared
+
+    private struct Card {
+        let kind: ProviderKind
+        let title: String
+        let fiveHour: LimitWindow?
+        let weekly: LimitWindow?
+        let problem: String?
+        let todayLine: String?
+    }
+
+    private func shown(_ windowKind: LimitWindowKind, for kind: ProviderKind, _ window: LimitWindow?) -> LimitWindow? {
+        settings.isLimitWindowShown(windowKind, for: kind) ? window : nil
+    }
+
+    private var cards: [Card] {
+        settings.providerOrder.compactMap { kind -> Card? in
+            guard settings.isShownInPopover(kind) else { return nil }
+            switch kind {
+            case .claude:
+                guard let c = snap.claude else { return nil }
+                let limits = snap.claudeLimits
+                let isUsable: Bool = { if case .ok = limits?.state { return true }; return false }()
+                return Card(
+                    kind: kind, title: "Claude Code",
+                    fiveHour: isUsable ? shown(.fiveHour, for: kind, limits?.fiveHour) : nil,
+                    weekly: isUsable ? shown(.weekly, for: kind, limits?.sevenDay) : nil,
+                    problem: claudeLimitsProblem ?? (isUsable ? nil : "No local reading yet — tap for setup"),
+                    todayLine: "\(formatTokens(c.total)) tokens · \(formatUSD(Pricing.claudeCostUSD(c))) today")
+            case .codex:
+                guard let x = snap.codex else { return nil }
+                let limits = snap.codexLimits
+                return Card(
+                    kind: kind, title: limits?.planType.map { "Codex (\($0))" } ?? "Codex",
+                    fiveHour: shown(.fiveHour, for: kind, limits?.primary),
+                    weekly: shown(.weekly, for: kind, limits?.secondary),
+                    problem: limits == nil ? "No limit data yet — run codex once" : nil,
+                    todayLine: "\(formatTokens(x.totalTokens)) tokens · \(formatUSD(Pricing.codexCostUSD(x))) today")
+            case .antigravity:
+                guard let g = snap.antigravity else { return nil }
+                return Card(
+                    kind: kind, title: "Antigravity",
+                    fiveHour: shown(.fiveHour, for: kind, g.fiveHour),
+                    weekly: shown(.weekly, for: kind, g.weekly),
+                    problem: (g.fiveHour == nil && g.weekly == nil) ? "No quota data yet — use Antigravity once" : nil,
+                    todayLine: "\(g.totalPrompts) prompts · \(formatUSD(Pricing.antigravityCostUSD(g))) today")
             }
         }
-        .font(.system(size: 12))
-        .padding(.vertical, 2)
+    }
+
+    /// The single tightest (lowest-remaining) window across every card,
+    /// ignoring ones already past their reset (meaningless) or hidden by a
+    /// problem state.
+    private var tightest: (title: String, label: String, window: LimitWindow)? {
+        var best: (title: String, label: String, window: LimitWindow)?
+        for card in cards {
+            for (label, w) in [("5-hour", card.fiveHour), ("Weekly", card.weekly)] {
+                // Skip only windows already known to have rolled over. A nil
+                // reset means "unknown", not "expired" — the Claude Desktop
+                // snapshot carries no reset time, so requiring one here hid
+                // every Claude window from the headline.
+                guard let w else { continue }
+                if let reset = w.resetsAt, reset <= Date() { continue }
+                if let current = best, current.window.remainingPercent <= w.remainingPercent { continue }
+                best = (card.title, label, w)
+            }
+        }
+        return best
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                PaneHeader(title: "Overview")
+
+                if let tightest {
+                    HeroRemainingCard(providerTitle: tightest.title, windowLabel: tightest.label, window: tightest.window)
+                }
+
+                if cards.isEmpty {
+                    NoteText(text: "No AI CLI detected yet. Looked for ~/.claude, ~/.codex and ~/.gemini.")
+                } else {
+                    ForEach(cards, id: \.kind.id) { card in
+                        ProviderSummaryCard(
+                            kind: card.kind, title: card.title, icon: card.kind.icon,
+                            iconTint: card.kind == .claude ? Color(nsColor: BrandIcons.claudeBrandColor)
+                                : card.kind == .antigravity ? Color(nsColor: BrandIcons.geminiBrandColor) : nil,
+                            fiveHour: card.fiveHour, weekly: card.weekly,
+                            problem: card.problem, todayLine: card.todayLine,
+                            onTap: { onSelectProvider(card.kind) })
+                    }
+                }
+                NoteText(text: "Tap a provider for token breakdowns, sessions, and cost trends.")
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+        }
     }
 }
 
@@ -307,10 +528,7 @@ struct ClaudePane: View {
                     }
 
                     if settings.showsDetail(.sessionActivity, for: .claude) && !c.sessions.isEmpty {
-                        CaptionText(title: "Sessions today · skills & tools")
-                        ForEach(c.sessions) { session in
-                            SessionActivityRow(session: session)
-                        }
+                        SessionActivitySection(title: "Sessions today · skills & tools", sessions: c.sessions)
                     }
 
                     if let m = c.lastModel {
@@ -348,7 +566,7 @@ struct ClaudePane: View {
                     NoteText(text: "Both windows hidden — enable in Settings › Providers")
                 }
             case .unavailable:
-                NoteText(text: "No local Claude statusline data — configure the bridge")
+                ClaudeStatusLineSetupPrompt()
             case .stale:
                 NoteText(text: "Local Claude statusline data is stale — use Claude Code again")
             case .error(let message):
@@ -386,10 +604,7 @@ struct CodexPane: View {
                         StatRow(name: "Cache hit rate", value: "\(Int(Pricing.codexCacheHitRatePercent(x).rounded()))%")
                     }
                     if settings.showsDetail(.sessionActivity, for: .codex) && !x.sessions.isEmpty {
-                        CaptionText(title: "Sessions today · skills & tools")
-                        ForEach(x.sessions) { session in
-                            SessionActivityRow(session: session)
-                        }
+                        SessionActivitySection(title: "Sessions today · skills & tools", sessions: x.sessions)
                     }
                     if settings.showsDetail(.averagePerSession, for: .codex) {
                         StatRow(name: "Avg/session",
@@ -583,12 +798,14 @@ struct AnalyticsPane: View {
 // MARK: - Sidebar
 
 enum PopoverPane: Hashable {
+    case overview
     case provider(ProviderKind)
     case analytics
 }
 
 private struct SidebarRow: View {
     let icon: NSImage?
+    let systemIcon: String
     let title: String
     let selected: Bool
     var body: some View {
@@ -596,10 +813,17 @@ private struct SidebarRow: View {
             if let icon {
                 Image(nsImage: icon).renderingMode(.template).resizable().frame(width: 15, height: 15)
             } else {
-                Image(systemName: "chart.line.uptrend.xyaxis").frame(width: 15, height: 15)
+                Image(systemName: systemIcon).frame(width: 15, height: 15)
             }
-            Text(title).font(.system(size: 12, weight: selected ? .semibold : .regular))
-            Spacer()
+            // Fixed weight with the selected state carried by the background
+            // instead: switching to semibold on selection widens the text
+            // enough to wrap onto a second line and the row visibly jumps.
+            Text(title)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -616,14 +840,23 @@ struct PopoverSidebar: View {
 
     private func title(for pane: PopoverPane) -> String {
         switch pane {
+        case .overview: return "Overview"
         case .provider(let kind): return kind.displayName
         case .analytics: return "Analytics"
         }
     }
     private func icon(for pane: PopoverPane) -> NSImage? {
         switch pane {
+        case .overview: return nil
         case .provider(let kind): return kind.icon
         case .analytics: return nil
+        }
+    }
+    private func systemIcon(for pane: PopoverPane) -> String {
+        switch pane {
+        case .overview: return "gauge.medium"
+        case .provider: return ""
+        case .analytics: return "chart.line.uptrend.xyaxis"
         }
     }
 
@@ -633,14 +866,15 @@ struct PopoverSidebar: View {
                 Button {
                     selection = pane
                 } label: {
-                    SidebarRow(icon: icon(for: pane), title: title(for: pane), selected: selection == pane)
+                    SidebarRow(icon: icon(for: pane), systemIcon: systemIcon(for: pane), title: title(for: pane), selected: selection == pane)
                 }
                 .buttonStyle(.plain)
             }
             Spacer(minLength: 0)
         }
         .padding(8)
-        .frame(width: 130)
+        // Wide enough for the longest tab name ("Claude Code") on one line.
+        .frame(width: 152)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .controlBackgroundColor))
     }
@@ -671,13 +905,29 @@ struct PopoverFooter: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
-            RefreshCountdownRepresentable(
-                updatedAt: viewModel.snapshot.updatedAt,
-                nextFire: viewModel.nextRefreshAt,
-                interval: viewModel.refreshInterval
-            )
-            .frame(height: 20)
-            .id(viewModel.nextRefreshAt)
+            if let loadingMessage = viewModel.loadingMessage {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(loadingMessage)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(height: 20)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Loading usage data")
+                .accessibilityValue(loadingMessage)
+            } else {
+                RefreshCountdownRepresentable(
+                    updatedAt: viewModel.snapshot.updatedAt,
+                    nextFire: viewModel.nextRefreshAt,
+                    interval: viewModel.refreshInterval
+                )
+                .frame(height: 20)
+                .id(viewModel.nextRefreshAt)
+            }
 
             Text("AI Usage Bar v\(appVersion)")
                 .font(.system(size: 11))
@@ -717,6 +967,7 @@ struct PopoverFooter: View {
 
 struct PopoverContentView: View {
     @ObservedObject var viewModel: UsageViewModel
+    @ObservedObject private var settings = AppSettings.shared
     @State private var selection: PopoverPane
     let appVersion: String
     let onRefresh: () -> Void
@@ -745,12 +996,13 @@ struct PopoverContentView: View {
         self.onSaveCSV = onSaveCSV
         self.onSettings = onSettings
         self.onQuit = onQuit
-        _selection = State(initialValue: Self.initialSelection(for: viewModel.snapshot))
+        _selection = State(initialValue: .overview)
     }
 
     private var tabs: [PopoverPane] {
-        var t: [PopoverPane] = AppSettings.shared.providerOrder.compactMap { kind -> PopoverPane? in
-            guard AppSettings.shared.isShownInPopover(kind) else { return nil }
+        var t: [PopoverPane] = [.overview]
+        t += settings.providerOrder.compactMap { kind -> PopoverPane? in
+            guard settings.isShownInPopover(kind) else { return nil }
             switch kind {
             case .claude: return viewModel.snapshot.claude != nil ? .provider(kind) : nil
             case .codex: return viewModel.snapshot.codex != nil ? .provider(kind) : nil
@@ -761,16 +1013,10 @@ struct PopoverContentView: View {
         return t
     }
 
-    private static func initialSelection(for snap: UsageSnapshot) -> PopoverPane {
-        for kind in AppSettings.shared.providerOrder {
-            guard AppSettings.shared.isShownInPopover(kind) else { continue }
-            switch kind {
-            case .claude: if snap.claude != nil { return .provider(.claude) }
-            case .codex: if snap.codex != nil { return .provider(.codex) }
-            case .antigravity: if snap.antigravity != nil { return .provider(.antigravity) }
-            }
+    private func repairSelection() {
+        if !tabs.contains(selection) {
+            selection = .overview
         }
-        return .analytics
     }
 
     var body: some View {
@@ -780,6 +1026,8 @@ struct PopoverContentView: View {
             VStack(spacing: 0) {
                 Group {
                     switch selection {
+                    case .overview:
+                        OverviewPane(snap: viewModel.snapshot, claudeLimitsProblem: viewModel.claudeLimitsProblem, onSelectProvider: { selection = .provider($0) })
                     case .provider(.claude):
                         ClaudePane(snap: viewModel.snapshot, claudeLimitsProblem: viewModel.claudeLimitsProblem, lastGoodClaudeFetchedAt: viewModel.lastGoodClaudeFetchedAt)
                     case .provider(.codex):
@@ -796,12 +1044,16 @@ struct PopoverContentView: View {
             .frame(width: 380)
         }
         .frame(height: 480)
+        .onChange(of: settings.popoverHiddenProviders) { _ in
+            repairSelection()
+        }
+        .onChange(of: settings.providerOrder) { _ in
+            repairSelection()
+        }
         .onChange(of: viewModel.snapshot.updatedAt) { _ in
             // If the currently selected provider disappears (stopped being
             // detected), fall back instead of showing a dead pane.
-            if case .provider = selection, !tabs.contains(selection) {
-                selection = tabs.first ?? .analytics
-            }
+            repairSelection()
         }
     }
 }

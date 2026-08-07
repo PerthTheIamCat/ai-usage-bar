@@ -28,6 +28,22 @@ private struct GeneralTab: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginItemError: String?
 
+    /// Every provider carries its own style, and those always shadow the
+    /// stored default — so a picker bound to the default alone looked broken:
+    /// changing it never altered the menu bar. This writes through to all
+    /// providers, and reports the shared style when they agree.
+    private var allProvidersStyleBinding: Binding<LimitStyle> {
+        Binding(
+            get: {
+                let styles = ProviderKind.allCases.map { settings.limitStyle(for: $0) }
+                return styles.dropFirst().allSatisfy { $0 == styles.first } ? (styles.first ?? settings.limitStyle) : settings.limitStyle
+            },
+            set: { style in
+                settings.limitStyle = style
+                for kind in ProviderKind.allCases { settings.setLimitStyle(style, for: kind) }
+            })
+    }
+
     var body: some View {
         Form {
             Section {
@@ -36,7 +52,7 @@ private struct GeneralTab: View {
                     Text("Used — “16% used”").tag(UsageDisplayMode.used)
                 }
                 .pickerStyle(.segmented)
-                Picker("Default menu bar style", selection: $settings.limitStyle) {
+                Picker("Menu bar style", selection: allProvidersStyleBinding) {
                     ForEach(LimitStyle.allCases) { style in
                         Text(style.displayName).tag(style)
                     }
@@ -45,7 +61,7 @@ private struct GeneralTab: View {
             } header: {
                 Text("Usage display")
             } footer: {
-                Text("Used as the migration/default style. Choose a different style for each provider in Settings › Providers. The popover always shows the full bar meter.")
+                Text("Applies to every provider. Choose a different style for an individual provider in Settings › Providers. The popover always shows the full bar meter.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -157,6 +173,11 @@ private struct ProvidersTab: View {
                 .onMove { settings.moveProvider(fromOffsets: $0, toOffset: $1) }
             }
             .listStyle(.plain)
+            .transaction { transaction in
+                // Variable-height rows inside a macOS List can animate their
+                // remeasurement and visibly jump while a provider expands.
+                transaction.animation = nil
+            }
             .frame(minHeight: 360, maxHeight: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -170,11 +191,25 @@ private struct ProviderRow: View {
     @ObservedObject private var settings = AppSettings.shared
     @State private var expanded = false
 
+    private var menuBarBinding: Binding<Bool> {
+        Binding(
+            get: { settings.isShownInMenuBar(kind) },
+            set: { settings.setShownInMenuBar(kind, $0) })
+    }
+
+    private var popoverBinding: Binding<Bool> {
+        Binding(
+            get: { settings.isShownInPopover(kind) },
+            set: { settings.setShownInPopover(kind, $0) })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                    // Keep the List row resize synchronous; animated
+                    // variable-height rows visibly jump on macOS.
+                    expanded.toggle()
                 } label: {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .frame(width: 12)
@@ -191,32 +226,26 @@ private struct ProviderRow: View {
                     .font(.system(size: 13, weight: .medium))
                 Spacer()
 
-                let menuShown = settings.isShownInMenuBar(kind)
-                Button {
-                    settings.setShownInMenuBar(kind, !menuShown)
-                } label: {
-                    Image(systemName: menuShown ? "eye" : "eye.slash")
-                        .foregroundStyle(menuShown ? Color.primary : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .help(menuShown ? "Shown in menu bar — click to hide" : "Hidden from menu bar — click to show")
-                .accessibilityLabel(menuShown ? "Hide \(kind.displayName) from menu bar" : "Show \(kind.displayName) in menu bar")
+                Toggle("Menu bar", isOn: menuBarBinding)
+                    .toggleStyle(.checkbox)
+                    .help("Show \(kind.displayName) in the menu bar")
+                    .accessibilityLabel("Show \(kind.displayName) in menu bar")
+                    .accessibilityValue(settings.isShownInMenuBar(kind) ? "On" : "Off")
 
-                let popoverShown = settings.isShownInPopover(kind)
-                Button {
-                    settings.setShownInPopover(kind, !popoverShown)
-                } label: {
-                    Image(systemName: popoverShown ? "rectangle.portrait" : "rectangle.portrait.slash")
-                        .foregroundStyle(popoverShown ? Color.primary : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .help(popoverShown ? "Shown in popover — click to hide" : "Hidden from popover — click to show")
-                .accessibilityLabel(popoverShown ? "Hide \(kind.displayName) from popover" : "Show \(kind.displayName) in popover")
+                Toggle("Popover", isOn: popoverBinding)
+                    .toggleStyle(.checkbox)
+                    .help("Show \(kind.displayName) in the popover")
+                    .accessibilityLabel("Show \(kind.displayName) in popover")
+                    .accessibilityValue(settings.isShownInPopover(kind) ? "On" : "Off")
 
-                Image(systemName: "line.3.horizontal")
+                Label("Drag", systemImage: "line.3.horizontal")
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
+                    .help("Drag to reorder providers")
+                    .accessibilityLabel("Drag to reorder providers")
             }
-            .padding(.vertical, 4)
+            .font(.system(size: 11))
+            .padding(.vertical, 5)
 
             if expanded {
                 ProviderConfiguration(kind: kind)
@@ -361,6 +390,7 @@ private struct CostTab: View {
 
 private struct LogTab: View {
     @State private var logText = ""
+    @State private var copyStatus: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -383,13 +413,27 @@ private struct LogTab: View {
             }
             HStack {
                 Button("Refresh") { logText = AppLog.shared.tail() }
+                Button("Copy Log", systemImage: "doc.on.doc") {
+                    let latestLog = AppLog.shared.tail()
+                    logText = latestLog
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(latestLog, forType: .string)
+                    copyStatus = latestLog.isEmpty ? "No log entries to copy" : "Log copied"
+                }
                 Button("Open Log File") {
                     NSWorkspace.shared.activateFileViewerSelecting([AppLog.shared.fileURL])
                 }
                 Spacer()
+                if let copyStatus {
+                    Text(copyStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                }
                 Button("Clear", role: .destructive) {
                     AppLog.shared.clear()
                     logText = AppLog.shared.tail()
+                    copyStatus = nil
                 }
             }
             Text("Local Claude/Codex snapshots, exchange-rate requests, and errors. Stored at ~/Library/Logs/AIUsageBar/.")

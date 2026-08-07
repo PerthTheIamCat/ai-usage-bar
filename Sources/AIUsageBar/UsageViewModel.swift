@@ -8,6 +8,9 @@ final class UsageViewModel: ObservableObject {
     @Published var claudeLimitsProblem: String?
     @Published var lastGoodClaudeFetchedAt: Date?
     @Published var nextRefreshAt = Date()
+    /// Short-lived progress text shown in the popover footer while a local
+    /// usage snapshot is being assembled.
+    @Published var loadingMessage: String?
     let refreshInterval: TimeInterval
 
     init(refreshInterval: TimeInterval) {

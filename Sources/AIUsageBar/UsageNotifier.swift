@@ -16,9 +16,33 @@ final class UsageNotifier {
     private var firedKeys = Set<String>()
 
     private init() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
-            self?.authorized = granted
-            if let error { appLog("notifications: authorization request failed — \(error.localizedDescription)") }
+        let center = UNUserNotificationCenter.current()
+        // macOS keeps the user's notification decision. Read it first so a
+        // denied app does not call requestAuthorization on every launch and
+        // fill the diagnostic log with the same permission error.
+        center.getNotificationSettings { [weak self] settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional:
+                self?.setAuthorized(true)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
+                    self?.setAuthorized(granted)
+                    if let error {
+                        appLog("notifications: authorization request failed — \(error.localizedDescription)")
+                    }
+                }
+            case .denied:
+                self?.setAuthorized(false)
+                appLog("notifications: permission denied by macOS — enable it in System Settings")
+            @unknown default:
+                self?.setAuthorized(false)
+            }
+        }
+    }
+
+    private func setAuthorized(_ value: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.authorized = value
         }
     }
 
@@ -54,12 +78,17 @@ final class UsageNotifier {
     }
 
     private func checkWindow(key: String, name: String, window: LimitWindow?, warnBelow: Double) {
-        guard let window, let resetsAt = window.resetsAt, resetsAt > Date() else { return }
+        // A window with no reset time is still a valid reading — the Claude
+        // Desktop snapshot never carries one. Only a reset that has already
+        // passed means the percentage is stale and not worth alerting on.
+        guard let window else { return }
+        if let resetsAt = window.resetsAt, resetsAt <= Date() { return }
         let low = window.remainingPercent < warnBelow
         if low, !firedKeys.contains(key) {
             firedKeys.insert(key)
+            let resetNote = window.resetsAt.map { " · resets in \(humanReset($0))" } ?? ""
             notify(id: key, title: "\(name) running low",
-                   body: "\(Int(window.remainingPercent.rounded()))% remaining · resets in \(humanReset(resetsAt))")
+                   body: "\(Int(window.remainingPercent.rounded()))% remaining\(resetNote)")
         } else if !low {
             firedKeys.remove(key)
         }
