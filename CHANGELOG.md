@@ -2,6 +2,75 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.10.0] - 2026-08-08
+
+### Important
+
+- **Update manually from the release page.** The bundle identifier changed
+  from `com.perth.aiusagebar` to `com.perththeiamcat.aiusagebar` (see below),
+  so macOS treats this as a different app and the in-app updater cannot
+  replace an older install. Download the ZIP, replace `AIUsageBar.app` in
+  `/Applications`, and re-grant notification permission if you use alerts.
+  Your settings carry over automatically on first launch.
+
+### Fixed
+
+- **The menu bar icon could stop appearing entirely.** The app ran, read
+  usage correctly, and created its status item, but macOS refused to assign
+  that item a menu bar slot and parked it off-screen — so the app looked like
+  it never launched and there was no way to reach the popover. The state was
+  held against the old bundle identifier and survived logout, preference
+  resets, Launch Services cleanup, and Control Center restarts; changing the
+  identifier is what releases it. Settings are migrated to the new domain on
+  first launch.
+- Startup pegged a CPU core and took ~45 seconds on large histories, which
+  macOS's watchdog could terminate outright. Log lines are now scanned for
+  their ASCII markers a byte at a time instead of through `String.contains`,
+  which does full Unicode grapheme comparison; startup is ~11 seconds on the
+  same data.
+- The popover ignored the Remaining/Used setting and always printed
+  remaining, while its meter and the menu bar honoured it — the same window
+  read "11%" in one place and "89%" in another.
+- Session rows showed the project folder rather than the session title.
+  Claude Code's automatic `ai-title` is now read alongside a manually set
+  title, with the manual one always winning. Codex writes no title of its
+  own, so those rows still fall back to the workspace name.
+- The menu bar flashed a placeholder on every refresh instead of only during
+  the first load, and progress now goes to the tooltip and popover footer.
+- Sidebar labels wrapped onto a second line when selected, and long provider
+  names were clipped.
+- A second copy of the app launching under the same identifier fought the
+  first one over the status item; duplicate launches now exit immediately.
+- Installing the Claude Code status line bridge into an empty
+  `~/.claude/settings.json` produced invalid JSON.
+
+### Added
+
+- Claude limits are now read from the Claude Desktop app's own local usage
+  file when the Claude Code status line bridge has no reading. Desktop-only
+  users get limits with no setup at all, and whichever source is fresher
+  wins.
+- A **Set Up Status Line Bridge** button in the popover installs the Claude
+  Code bridge in one click, backing up `~/.claude/settings.json` first and
+  refusing to touch an existing `statusLine` entry.
+
+### Changed
+
+- The popover opens on a new **Overview** pane built around the one question
+  it exists to answer: a headline showing the single tightest window across
+  every provider, then one compact card per provider with its meters, reset
+  time, and today's tokens and cost. Token breakdowns, sessions, skills, and
+  trends moved one click away into the per-provider tabs.
+- Session lists show the three most recent of today's sessions with no
+  expansion; skills and tools within a session are laid out as an aligned
+  table with counts and costs in columns instead of one run-on paragraph.
+  Full lists remain available through Export.
+- The General settings menu-bar style control now applies to every provider.
+  It was bound to a stored default that per-provider styles always shadowed,
+  so changing it appeared to do nothing.
+- The menu bar title dropped its redundant "AI" prefix and wide separators,
+  which frees roughly 30pt of menu bar space.
+
 ## [0.9.0] - 2026-08-02
 
 ### Added

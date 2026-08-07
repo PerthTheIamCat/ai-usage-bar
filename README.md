@@ -73,13 +73,17 @@ and keeps the last known value; it never falls back to an HTTP request.
 Claude Code's documented `statusLine` input includes the 5-hour and 7-day
 `rate_limits` fields. See the [Claude Code status line documentation](https://code.claude.com/docs/en/statusline).
 
-The provider panes can also show today's sessions. Expand a session to see
-the named Claude skills and tools recorded in its local log. Codex tool calls
-are read from `function_call` / `custom_tool_call` records; Codex skills are
-marked **inferred** when a tool argument references a `SKILL.md` file because
-Codex does not emit a dedicated skill event. Only session IDs, timestamps,
-token totals, names, counts, and derived cost estimates are used for this view
-— prompt text and tool arguments are not saved or displayed by AI Usage Bar.
+The provider panes show the three most recent sessions first; choose **Show all**
+to expand the complete list. Explicit Claude `customTitle` and Codex
+`thread_name_updated` metadata are shown as session titles when available,
+with a workspace/ID fallback when a provider has not supplied one. Expand an
+individual session to see the named Claude skills and tools recorded in its
+local log. Codex tool calls are read from `function_call` /
+`custom_tool_call` records; Codex skills are marked **inferred** when a tool
+argument references a `SKILL.md` file because Codex does not emit a dedicated
+skill event. Only session titles, IDs, timestamps, token totals, names, counts,
+and derived cost estimates are used for this view — prompt text and tool
+arguments are not saved or displayed by AI Usage Bar.
 
 ## Customize providers and reports
 
@@ -97,6 +101,9 @@ estimates. In **Settings → General**, session alerts can notify when a session
 crosses a token threshold, while privacy toggles hide session IDs and workspace
 names from the popover and exports. Session summaries are cached by local log
 file fingerprint so refreshes do not rescan unchanged files.
+On startup, today's provider data is shown before the heavier 7-/30-day cost
+and trend scan finishes; the menu bar and popover footer show the current
+loading phase while that background work runs.
 
 ## Limits to know
 

@@ -1,6 +1,7 @@
 .DS_Store
 .build/
 .swiftpm/
+graphify-out/
 AIUsageBar.app/
 AIUsageBar-*.zip
 AIUsageBar-*.zip.sha256
