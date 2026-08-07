@@ -141,15 +141,24 @@ struct LimitRow: View {
             HStack {
                 Text(name).font(.system(size: 13, weight: .medium))
                 Spacer()
-                Text(AppSettings.shared.displayMode.rowText(remaining: remaining))
+                Text((window.isEstimated ? "~" : "") + AppSettings.shared.displayMode.rowText(remaining: remaining))
                     .font(.system(size: 13, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Color(nsColor: limitColor(remaining)))
             }
             LimitBarRepresentable(remainingPercent: remaining)
                 .frame(height: 5)
-            Text("resets in \(humanReset(window.resetsAt))")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
+            // The Claude Desktop snapshot carries percentages but no reset
+            // time, so this caption used to read "resets in —" forever. Say
+            // something useful or say nothing.
+            if let reset = window.resetsAt {
+                Text("resets in \(humanReset(reset))")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            } else if window.isEstimated {
+                Text("estimated from tokens since the last reading")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -228,10 +237,10 @@ private struct MiniLimitRow: View {
             // number has to follow it — printing "left" next to a bar drawn
             // as "used" made the same window read 11% here and 89% in the
             // menu bar.
-            Text(settings.displayMode.shortText(remaining: window.remainingPercent))
+            Text((window.isEstimated ? "~" : "") + settings.displayMode.shortText(remaining: window.remainingPercent))
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(Color(nsColor: limitColor(window.remainingPercent)))
-                .frame(width: 34, alignment: .trailing)
+                .frame(width: 40, alignment: .trailing)
         }
     }
 }

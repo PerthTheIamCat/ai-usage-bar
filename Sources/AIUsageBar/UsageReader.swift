@@ -176,6 +176,33 @@ enum UsageReader {
         filesModified(under: root, ext: ext, sinceDaysAgo: 1)
     }
 
+    /// Claude tokens recorded in `(from, to]`. Used to project a limit
+    /// percentage forward between the Desktop app's occasional samples: the
+    /// weighting Anthropic applies is not public, so the caller calibrates a
+    /// percent-per-token rate from the user's own consecutive samples rather
+    /// than assuming one.
+    static func claudeTokens(from: Date, to: Date) -> Int {
+        guard FileManager.default.fileExists(atPath: claudeDir.path), from < to else { return 0 }
+        var total = 0
+        for file in filesModifiedToday(under: claudeDir, ext: "jsonl") {
+            forEachLine(of: file) { line in
+                guard fastContains(line, "\"usage\""), fastContains(line, "\"assistant\""),
+                      let data = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      (obj["type"] as? String) == "assistant",
+                      let ts = obj["timestamp"] as? String,
+                      let date = parseISO(ts),
+                      date > from, date <= to,
+                      let message = obj["message"] as? [String: Any],
+                      let usage = message["usage"] as? [String: Any]
+                else { return }
+                total += ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
+                    .reduce(0) { $0 + ((usage[$1] as? Int) ?? 0) }
+            }
+        }
+        return total
+    }
+
     /// Files modified within the last `days` local days (1 = today only).
     /// Backs both the today-only readers and the 7-/30-day period aggregates.
     private static func filesModified(under root: URL, ext: String, sinceDaysAgo days: Int) -> [URL] {

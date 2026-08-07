@@ -53,6 +53,20 @@ All notable changes to AI Usage Bar are documented in this file.
 - A **Set Up Status Line Bridge** button in the popover installs the Claude
   Code bridge in one click, backing up `~/.claude/settings.json` first and
   refusing to touch an existing `statusLine` entry.
+- Both Claude limit sources are now watched directly, so a new reading shows
+  up within seconds of being written instead of waiting for the next
+  once-a-minute refresh.
+- Between the Claude Desktop app's occasional samples, the five-hour figure
+  is projected forward from the tokens actually logged since the last
+  reading. The rate is calibrated from your own previous interval rather than
+  an assumed formula, capped at one interval's worth of movement, shown with
+  a leading `~`, and never used to raise a limit notification.
+
+### Known limits
+
+- Reset times are only available through the Claude Code status line bridge.
+  The Desktop app's file carries percentages but no reset time, so those rows
+  no longer show a permanently empty "resets in —" caption.
 
 ### Changed
 

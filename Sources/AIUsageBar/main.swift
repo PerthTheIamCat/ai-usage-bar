@@ -16,6 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var viewModel = UsageViewModel(refreshInterval: refreshInterval)
     private var timer: Timer?
     private var animationTimer: Timer?
+    private var limitsWatchTimer: Timer?
+    /// Modification dates of the Claude limit sources at the last check, so a
+    /// rewrite by the bridge or the Desktop app is noticed within seconds.
+    private var claudeSourceStamps: [String: Date] = [:]
+    private var hasPrimedClaudeSources = false
     private var animationPhase: CGFloat = 0
     // Last successful Claude limits, reused while the local statusLine
     // snapshot is stale or unavailable. Persisted to UserDefaults so a
@@ -88,6 +93,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+
+        // Claude's limit sources are written by other processes on their own
+        // schedule — the status line bridge on every CLI turn, the Desktop app
+        // every few minutes. Waiting for the next full refresh added up to a
+        // minute of our own lag on top of that, so watch the two files and
+        // pick a new reading up as soon as it lands. Re-reading limits is a
+        // couple of small JSON files, nothing like the full log scan.
+        let limitsWatch = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            self?.refreshClaudeLimitsIfSourceChanged()
+        }
+        RunLoop.main.add(limitsWatch, forMode: .common)
+        limitsWatchTimer = limitsWatch
 
         let animation = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
             guard let self, self.lastSnapshot?.antigravity?.isWorking == true else { return }
@@ -329,6 +346,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// local read or failed, so the display holds steady. A stale/unavailable
     /// source is still surfaced as a status note. Feeds the popover's view
     /// model — the popover itself just re-renders reactively.
+    /// Cheap poll of the two Claude limit files. `stat` on two paths every few
+    /// seconds costs nothing next to the log scan a full refresh runs, and it
+    /// avoids the atomic-replace races a file-descriptor watch would hit.
+    private func refreshClaudeLimitsIfSourceChanged() {
+        guard var snap = lastSnapshot, snap.claudeLimits != nil else { return }
+        let sources = [ClaudeLimitsReader.statusLineSnapshotURL, ClaudeLimitsReader.desktopPlanUsageURL]
+        var changed = false
+        for url in sources {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if claudeSourceStamps[url.path] != modified {
+                claudeSourceStamps[url.path] = modified
+                changed = true
+            }
+        }
+        // The first pass only records the current stamps — the refresh that
+        // produced `lastSnapshot` already read them, so there is nothing new
+        // until one of them actually moves.
+        guard hasPrimedClaudeSources else {
+            hasPrimedClaudeSources = true
+            return
+        }
+        guard changed else { return }
+        snap.claudeLimits = ClaudeLimitsReader.fetch()
+        apply(snap)
+    }
+
     private func apply(_ snap: UsageSnapshot) {
         lastSnapshot = snap
         var snap = snap

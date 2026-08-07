@@ -31,6 +31,9 @@ enum ClaudeLimitsReader {
         var observedAt: Date
         var rateLimits: [String: Any]
         var source: ClaudeLimits.Source
+        /// Only the Desktop app keeps a history, so only it can be calibrated
+        /// against a previous sample.
+        var previous: (at: Date, fiveHourUsed: Double)?
     }
 
     static func fetch() -> ClaudeLimits {
@@ -49,6 +52,14 @@ enum ClaudeLimitsReader {
         limits.source = stored.source
         limits.fiveHour = parseWindow(stored.rateLimits["five_hour"])
         limits.sevenDay = parseWindow(stored.rateLimits["seven_day"])
+        // The Desktop app only samples every few minutes, so between samples
+        // the five-hour figure sits still while usage keeps climbing. Project
+        // it forward from tokens actually logged since the sample; the weekly
+        // window moves far too slowly for this to be worth doing.
+        if let measured = limits.fiveHour,
+           let projected = projectedFiveHour(measured, stored: stored) {
+            limits.fiveHour = projected
+        }
 
         let sourceLabel = stored.source == .desktopApp ? "Desktop app" : "statusline"
         guard limits.fiveHour != nil || limits.sevenDay != nil else {
@@ -137,7 +148,52 @@ enum ClaudeLimitsReader {
         return StoredStatusLine(
             observedAt: Date(timeIntervalSince1970: ms / 1000),
             rateLimits: rateLimits,
-            source: .desktopApp)
+            source: .desktopApp,
+            previous: previousDesktopSample(samples))
+    }
+
+    /// The sample before the newest one, used to calibrate the projection.
+    private static func previousDesktopSample(_ samples: [[String: Any]]) -> (at: Date, fiveHourUsed: Double)? {
+        guard samples.count >= 2 else { return nil }
+        let prior = samples[samples.count - 2]
+        guard let ms = number(prior["t"]),
+              let usage = prior["u"] as? [String: Any],
+              let fh = number(usage["fh"])
+        else { return nil }
+        return (Date(timeIntervalSince1970: ms / 1000), fh)
+    }
+
+    /// Projects the five-hour window forward from the newest sample using the
+    /// tokens logged since it. The rate comes from the user's own previous
+    /// interval — how much the percentage moved for the tokens spent in it —
+    /// so it adapts to their plan and model mix instead of assuming a formula.
+    /// Returns nil whenever there is nothing solid to calibrate against.
+    private static func projectedFiveHour(_ measured: LimitWindow, stored: StoredStatusLine) -> LimitWindow? {
+        guard stored.source == .desktopApp,
+              let previous = stored.previous,
+              previous.at < stored.observedAt
+        else { return nil }
+
+        let percentDelta = measured.usedPercent - previous.fiveHourUsed
+        guard percentDelta > 0 else { return nil }
+        let calibrationTokens = UsageReader.claudeTokens(from: previous.at, to: stored.observedAt)
+        guard calibrationTokens > 0 else { return nil }
+
+        let sinceTokens = UsageReader.claudeTokens(from: stored.observedAt, to: Date())
+        guard sinceTokens > 0 else { return nil }
+
+        let ratePerToken = percentDelta / Double(calibrationTokens)
+        // A calibration window that moved a lot on very few tokens would give
+        // a wild rate, so never project further than one interval's worth of
+        // movement past the sample — a real reading lands before then anyway.
+        let ceiling = measured.usedPercent + percentDelta
+        let projected = min(measured.usedPercent + ratePerToken * Double(sinceTokens), ceiling)
+        guard projected > measured.usedPercent else { return nil }
+
+        var window = measured
+        window.usedPercent = min(100, projected)
+        window.isEstimated = true
+        return window
     }
 
     private static func parseWindow(_ raw: Any?) -> LimitWindow? {

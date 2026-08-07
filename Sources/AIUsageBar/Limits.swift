@@ -4,6 +4,11 @@ import Foundation
 struct LimitWindow {
     var usedPercent: Double   // 0-100
     var resetsAt: Date?
+    /// True when `usedPercent` was projected forward from the last real
+    /// reading rather than read from a source. Displayed with a "~" so an
+    /// estimate is never mistaken for a measurement, and deliberately not
+    /// used to raise limit notifications.
+    var isEstimated = false
 
     var remainingPercent: Double { max(0, 100 - usedPercent) }
 }

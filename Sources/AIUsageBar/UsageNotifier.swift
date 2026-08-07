@@ -81,7 +81,9 @@ final class UsageNotifier {
         // A window with no reset time is still a valid reading — the Claude
         // Desktop snapshot never carries one. Only a reset that has already
         // passed means the percentage is stale and not worth alerting on.
-        guard let window else { return }
+        // Never alert on a projected figure — an estimate that overshoots
+        // would fire a warning the real reading then contradicts.
+        guard let window, !window.isEstimated else { return }
         if let resetsAt = window.resetsAt, resetsAt <= Date() { return }
         let low = window.remainingPercent < warnBelow
         if low, !firedKeys.contains(key) {
