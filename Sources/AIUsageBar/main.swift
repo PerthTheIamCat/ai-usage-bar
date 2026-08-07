@@ -34,6 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastSnapshot: UsageSnapshot?
     // When the periodic refresh timer next fires, for the countdown ring.
     private var nextRefreshAt = Date()
+    // Ignore progress/completion callbacks from an older refresh if the user
+    // presses Refresh Now while a previous read is still running.
+    private var activeRefreshID: UUID?
+    // Historical cost/trend scans are deliberately kept out of the first
+    // snapshot so today's data can appear quickly. Only one slow scan runs at
+    // a time, and its progress is shown in the same loading indicator.
+    private var periodStatsInFlight = false
+    private var activePeriodStatsID: UUID?
 
     private static let appVersion: String = {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -43,13 +51,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A stray second copy of the app (e.g. a dev build left in another
+        // folder that Spotlight also indexes) launches under the same bundle
+        // identifier and fights the first instance over the same status
+        // item, which looks like the app hanging / refusing to open. Only
+        // one instance should ever run.
+        if let bundleID = Bundle.main.bundleIdentifier {
+            let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+            if !others.isEmpty {
+                appLog("app launched v\(Self.appVersion) — another instance is already running, quitting this one")
+                NSApp.terminate(nil)
+                return
+            }
+        }
         appLog("app launched v\(Self.appVersion)")
         restoreLastGoodClaude()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Give the item a stable identity so macOS persists its menu bar
+        // position across launches instead of re-placing it each time.
+        statusItem.autosaveName = "AIUsageBarStatusItem"
+        statusItem.isVisible = true
         statusItem.button?.title = "AI …"
+        statusItem.button?.toolTip = "AI Usage Bar — starting…"
+        statusItem.button?.setAccessibilityLabel("AI Usage Bar")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked)
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        appLog("status item created — visible=\(statusItem.isVisible)")
 
         refresh()
         // .common mode so the periodic refresh keeps firing while the popover
@@ -178,23 +207,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refresh() {
+        guard !periodStatsInFlight, activeRefreshID == nil else { return }
+        let refreshID = UUID()
+        activeRefreshID = refreshID
+        let isInitialLoad = lastSnapshot == nil
+        let startedAt = Date()
+        let shouldStartPeriodStats = Date() >= nextPeriodStatsAt
+        if isInitialLoad {
+            appLog("startup: reading local usage logs")
+        }
+        setLoadingStatus("Starting…")
         maybeRefreshExchangeRate()
         nextRefreshAt = Date().addingTimeInterval(refreshInterval)
-        let doPeriodStats = Date() >= nextPeriodStatsAt
         DispatchQueue.global(qos: .utility).async {
-            let snap = UsageReader.snapshot(includePeriodStats: doPeriodStats)
+            let snap = UsageReader.snapshot(includePeriodStats: false) { message in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.activeRefreshID == refreshID else { return }
+                    self.setLoadingStatus(message)
+                }
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
+                guard self.activeRefreshID == refreshID else { return }
                 var snap = snap
-                if doPeriodStats {
-                    self.lastGoodPeriodCosts = snap.periodCosts
-                    self.lastGoodDailyTrend = snap.dailyTrend
-                    self.nextPeriodStatsAt = Date().addingTimeInterval(self.periodStatsInterval)
-                } else {
-                    snap.periodCosts = self.lastGoodPeriodCosts
-                    snap.dailyTrend = self.lastGoodDailyTrend
-                }
+                snap.periodCosts = self.lastGoodPeriodCosts
+                snap.dailyTrend = self.lastGoodDailyTrend
                 self.apply(snap)
+                self.activeRefreshID = nil
+                let elapsed = String(format: "%.1fs", Date().timeIntervalSince(startedAt))
+                if isInitialLoad || Date().timeIntervalSince(startedAt) > 2 {
+                    appLog("\(isInitialLoad ? "startup" : "refresh"): usage snapshot ready in \(elapsed)")
+                }
+                self.viewModel.loadingMessage = nil
+                if shouldStartPeriodStats {
+                    self.startPeriodStatsRefresh(logAsStartup: isInitialLoad)
+                }
+            }
+        }
+    }
+
+    private func startPeriodStatsRefresh(logAsStartup: Bool) {
+        guard !periodStatsInFlight else { return }
+        periodStatsInFlight = true
+        let statsID = UUID()
+        activePeriodStatsID = statsID
+        nextPeriodStatsAt = Date().addingTimeInterval(periodStatsInterval)
+        let startedAt = Date()
+        setLoadingStatus("Calculating 7/30-day costs…")
+
+        DispatchQueue.global(qos: .utility).async {
+            let periodCosts = UsageReader.periodCosts()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.activePeriodStatsID == statsID else { return }
+                self.setLoadingStatus("Calculating 30-day trend…")
+            }
+            let trend = UsageReader.dailyTrend(days: 30)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.activePeriodStatsID == statsID else { return }
+                self.lastGoodPeriodCosts = periodCosts
+                self.lastGoodDailyTrend = trend
+                var snap = self.viewModel.snapshot
+                snap.periodCosts = periodCosts
+                snap.dailyTrend = trend
+                self.apply(snap)
+                self.periodStatsInFlight = false
+                self.activePeriodStatsID = nil
+                self.nextRefreshAt = Date().addingTimeInterval(self.refreshInterval)
+                self.viewModel.nextRefreshAt = self.nextRefreshAt
+                self.viewModel.loadingMessage = nil
+                let elapsed = String(format: "%.1fs", Date().timeIntervalSince(startedAt))
+                appLog("\(logAsStartup ? "startup" : "refresh"): historical stats ready in \(elapsed)")
             }
         }
     }
@@ -286,6 +368,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Status bar title
 
+    private func setLoadingStatus(_ message: String) {
+        viewModel.loadingMessage = message
+        guard let button = statusItem.button else { return }
+        button.toolTip = "AI Usage Bar — \(message)"
+        // Only take over the title before there is anything to show. Every
+        // refresh re-reads the logs, so swapping the live percentages out for
+        // a placeholder each minute just makes the menu bar flicker — keep
+        // the last good reading up and report progress in the tooltip and
+        // the popover footer instead.
+        guard lastSnapshot == nil else { return }
+        let font = NSFont.menuBarFont(ofSize: 0)
+        button.attributedTitle = NSAttributedString(
+            string: "AI…",
+            attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+    }
+
     /// `remainingPercent` is nil when the segment has no meaningful percent
     /// to draw a meter from (e.g. unavailable/error states, or a
     /// token/prompt-count fallback) — those always render as text regardless
@@ -352,9 +450,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let budget = budgetPart(snap) { parts.append(budget) }
         guard let button = statusItem.button else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
+        // Menu bar space is scarce — on a notched Mac with a busy bar, macOS
+        // silently parks an item off-screen rather than shrinking it, and the
+        // app looks like it never launched. Keep this title as narrow as the
+        // content allows: no redundant "AI" word (the icons identify the
+        // providers, and the tooltip/accessibility label carry the app name)
+        // and a single-space gap between segments.
         let title = NSMutableAttributedString()
         for part in parts {
-            if title.length > 0 { title.append(NSAttributedString(string: "   ", attributes: [.font: font])) }
+            if title.length > 0 {
+                title.append(NSAttributedString(string: " ", attributes: [.font: font]))
+            }
             let color: NSColor = part.warning ? .systemRed : .labelColor
             title.append(BrandIcons.attachment(part.icon, font: font, color: color))
             title.append(NSAttributedString(string: " ", attributes: [.font: font]))
@@ -367,7 +473,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 title.append(NSAttributedString(string: part.text, attributes: [.font: font, .foregroundColor: color]))
             }
         }
-        button.attributedTitle = title.length == 0 ? NSAttributedString(string: "AI —", attributes: [.font: font]) : title
+        if parts.isEmpty {
+            title.append(NSAttributedString(string: "AI —", attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
+        }
+        button.attributedTitle = title
+        button.toolTip = "AI Usage Bar — Click to view usage"
     }
 
     private func claudeTitleValue(_ snap: UsageSnapshot) -> String {
@@ -436,7 +546,8 @@ func dumpSessionActivities(_ provider: String, _ sessions: [SessionActivity]) {
             ? "—"
             : formatSessionActivityCounts(session.tools)
         let time = session.lastActivityAt?.formatted(date: .omitted, time: .shortened) ?? "—"
-        print("  \(session.id.prefix(12)) · \(time) · \(formatTokens(session.tokenTotal)) tokens · skills=\(skillText) · tools=\(tools)")
+        let name = session.name ?? session.workspace ?? "—"
+        print("  \(session.id.prefix(12)) · \(name) · \(time) · \(formatTokens(session.tokenTotal)) tokens · skills=\(skillText) · tools=\(tools)")
     }
 }
 

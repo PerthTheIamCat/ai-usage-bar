@@ -325,7 +325,9 @@ final class AppSettings: ObservableObject {
     func isShownInMenuBar(_ kind: ProviderKind) -> Bool { !menuBarHiddenProviders.contains(kind) }
 
     func setShownInMenuBar(_ kind: ProviderKind, _ shown: Bool) {
-        if shown { menuBarHiddenProviders.remove(kind) } else { menuBarHiddenProviders.insert(kind) }
+        var hidden = menuBarHiddenProviders
+        if shown { hidden.remove(kind) } else { hidden.insert(kind) }
+        menuBarHiddenProviders = hidden
     }
 
     /// Providers can remain in the menu bar while being hidden from the
@@ -340,7 +342,9 @@ final class AppSettings: ObservableObject {
     func isShownInPopover(_ kind: ProviderKind) -> Bool { !popoverHiddenProviders.contains(kind) }
 
     func setShownInPopover(_ kind: ProviderKind, _ shown: Bool) {
-        if shown { popoverHiddenProviders.remove(kind) } else { popoverHiddenProviders.insert(kind) }
+        var hidden = popoverHiddenProviders
+        if shown { hidden.remove(kind) } else { hidden.insert(kind) }
+        popoverHiddenProviders = hidden
     }
 
     /// Detail rows are independently configurable per provider. The global
@@ -500,7 +504,30 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// The app shipped under `com.perth.aiusagebar` up to 0.9.0. macOS ended
+    /// up holding state against that identifier which stopped it from ever
+    /// being granted a menu bar slot — the app ran but its icon never
+    /// appeared, and nothing user-writable (preferences, Control Center,
+    /// Launch Services) could clear it. The bundle identifier changed to
+    /// break out of that state, which also moves the preferences domain, so
+    /// settings are carried over once on first launch under the new one.
+    private static let legacyDomain = "com.perth.aiusagebar"
+    private static let migrationFlag = "migratedFromLegacyBundleDomain"
+
+    private static func migrateLegacyDomainIfNeeded() {
+        let d = UserDefaults.standard
+        guard !d.bool(forKey: migrationFlag) else { return }
+        defer { d.set(true, forKey: migrationFlag) }
+        guard Bundle.main.bundleIdentifier != legacyDomain,
+              let legacy = d.persistentDomain(forName: legacyDomain), !legacy.isEmpty
+        else { return }
+        for (key, value) in legacy where d.object(forKey: key) == nil {
+            d.set(value, forKey: key)
+        }
+    }
+
     private init() {
+        Self.migrateLegacyDomainIfNeeded()
         let d = UserDefaults.standard
         displayMode = UsageDisplayMode(rawValue: d.string(forKey: Keys.displayMode) ?? "") ?? .remaining
         let stored = d.double(forKey: Keys.warnBelowRemaining)

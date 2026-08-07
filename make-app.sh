@@ -50,7 +50,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key><string>com.perth.aiusagebar</string>
+    <key>CFBundleIdentifier</key><string>com.perththeiamcat.aiusagebar</string>
     <key>CFBundleName</key><string>AI Usage Bar</string>
     <key>CFBundleExecutable</key><string>AIUsageBar</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -59,6 +59,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
+    <key>NSUserNotificationAlertStyle</key><string>banner</string>
     <key>SUFeedURL</key><string>https://perththeiamcat.github.io/ai-usage-bar/appcast.xml</string>
     <key>SUPublicEDKey</key><string>GZz3+3QtNsOQQuZ0OdbFyFuua1WkN3uWj11cx/WGkSc=</string>
     <key>SUEnableAutomaticChecks</key><true/>
