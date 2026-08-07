@@ -61,6 +61,37 @@ struct CaptionText: View {
     }
 }
 
+/// The popover draws itself on the system's vibrant material. Filling panels
+/// inside it with an opaque control colour made them read as separate slabs
+/// pasted onto a translucent sheet — the sidebar looked solid while the
+/// content behind it showed the desktop. A light translucent fill layers over
+/// the same material instead, so the whole popover stays one surface.
+/// Reduce Transparency swaps everything back to solid colours (HIG 9.5).
+struct PanelSurface: ViewModifier {
+    var cornerRadius: CGFloat = 10
+    var opacity: Double = 0.07
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        content.background(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(reduceTransparency
+                      ? Color(nsColor: .controlBackgroundColor)
+                      : Color.primary.opacity(opacity))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(reduceTransparency ? 0 : 0.08), lineWidth: 0.5)
+                )
+        )
+    }
+}
+
+extension View {
+    func panelSurface(cornerRadius: CGFloat = 10, opacity: Double = 0.07) -> some View {
+        modifier(PanelSurface(cornerRadius: cornerRadius, opacity: opacity))
+    }
+}
+
 struct NoteText: View {
     let text: String
     var body: some View {
@@ -306,7 +337,7 @@ private struct ProviderSummaryCard: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
+            .panelSurface(cornerRadius: 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -357,7 +388,7 @@ private struct HeroRemainingCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
+        .panelSurface(cornerRadius: 12)
     }
 }
 
@@ -885,7 +916,15 @@ struct PopoverSidebar: View {
         // Wide enough for the longest tab name ("Claude Code") on one line.
         .frame(width: 152)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Color(nsColor: .controlBackgroundColor))
+        // A sidebar is set off by a slightly deeper tone of the same surface,
+        // not by an opaque slab over the popover's material.
+        .background(sidebarFill)
+    }
+
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    private var sidebarFill: Color {
+        reduceTransparency ? Color(nsColor: .controlBackgroundColor) : Color.primary.opacity(0.05)
     }
 }
 

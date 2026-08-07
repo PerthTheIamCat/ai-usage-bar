@@ -2,6 +2,19 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.10.1] - 2026-08-08
+
+### Fixed
+
+- The popover looked like separate slabs stitched together. It draws on the
+  system's vibrant material, but the sidebar and the Overview cards painted
+  an opaque control colour over it while the footer stayed translucent, so
+  parts of the panel showed the desktop through and parts did not. Those
+  panels now use a light translucent fill layered on the same material, and
+  the popover reads as one surface.
+- Enabling Reduce Transparency now switches the popover to solid backgrounds
+  instead of leaving translucent panels in place.
+
 ## [0.10.0] - 2026-08-08
 
 ### Important
