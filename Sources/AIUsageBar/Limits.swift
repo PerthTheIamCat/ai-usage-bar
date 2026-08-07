@@ -15,10 +15,17 @@ struct ClaudeLimits {
         case unavailable
         case error(String)
     }
+    /// Which local snapshot the reading came from — the Claude Code CLI's
+    /// statusLine bridge, or the Claude Desktop app's own local usage file.
+    enum Source {
+        case statusLineBridge
+        case desktopApp
+    }
     var state: State = .error("unknown")
     var fiveHour: LimitWindow?
     var sevenDay: LimitWindow?
     var fetchedAt: Date?
+    var source: Source?
 }
 
 struct CodexLimits {

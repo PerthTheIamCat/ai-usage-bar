@@ -10,6 +10,16 @@ enum ClaudeLimitsReader {
             .appendingPathComponent("claude-statusline.json")
     }()
 
+    /// The Claude Desktop app (not Claude Code) writes its own local plan-
+    /// usage samples here. The statusLine bridge only fires from Claude Code
+    /// CLI sessions, so people who only use the Desktop app would otherwise
+    /// never see a limits reading — this file is the fallback source.
+    static let desktopPlanUsageURL: URL = {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Claude", isDirectory: true)
+            .appendingPathComponent("plan-usage-history.json")
+    }()
+
     /// Claude Code updates status-line input after activity. If no activity
     /// has supplied a new snapshot for this long, keep the value visible as
     /// last-known data but mark it stale instead of trying to refresh it.
@@ -20,23 +30,30 @@ enum ClaudeLimitsReader {
     private struct StoredStatusLine {
         var observedAt: Date
         var rateLimits: [String: Any]
+        var source: ClaudeLimits.Source
     }
 
     static func fetch() -> ClaudeLimits {
-        guard let stored = readStoredStatusLine() else {
+        // Prefer whichever local source has the freshest reading — a person
+        // may use both the CLI and the Desktop app, and either can go quiet
+        // while the other keeps updating.
+        let candidates = [readStoredStatusLine(), readDesktopPlanUsage()].compactMap { $0 }
+        guard let stored = candidates.max(by: { $0.observedAt < $1.observedAt }) else {
             logStatus(state: "unavailable", observedAt: nil, fiveHour: nil, weekly: nil,
-                      message: "claude: local statusline snapshot unavailable — configure the Claude Code bridge")
+                      message: "claude: no local statusline or Desktop-app snapshot found — configure the Claude Code bridge")
             return ClaudeLimits(state: .unavailable)
         }
 
         var limits = ClaudeLimits()
         limits.fetchedAt = stored.observedAt
+        limits.source = stored.source
         limits.fiveHour = parseWindow(stored.rateLimits["five_hour"])
         limits.sevenDay = parseWindow(stored.rateLimits["seven_day"])
 
+        let sourceLabel = stored.source == .desktopApp ? "Desktop app" : "statusline"
         guard limits.fiveHour != nil || limits.sevenDay != nil else {
             logStatus(state: "unavailable", observedAt: stored.observedAt, fiveHour: nil, weekly: nil,
-                      message: "claude: local statusline snapshot has no rate-limit windows")
+                      message: "claude: local \(sourceLabel) snapshot has no rate-limit windows")
             limits.state = .unavailable
             return limits
         }
@@ -46,13 +63,13 @@ enum ClaudeLimitsReader {
         let message: String
         switch limits.state {
         case .ok:
-            message = "claude: local statusline limits — 5h \(pct(limits.fiveHour)) used, weekly \(pct(limits.sevenDay)) used"
+            message = "claude: local \(sourceLabel) limits — 5h \(pct(limits.fiveHour)) used, weekly \(pct(limits.sevenDay)) used"
         case .stale:
-            message = "claude: local statusline limits stale — last update \(humanAgo(stored.observedAt))"
+            message = "claude: local \(sourceLabel) limits stale — last update \(humanAgo(stored.observedAt))"
         case .unavailable:
-            message = "claude: local statusline snapshot unavailable"
+            message = "claude: local \(sourceLabel) snapshot unavailable"
         case .error:
-            message = "claude: local statusline limits error"
+            message = "claude: local \(sourceLabel) limits error"
         }
         logStatus(state: stateLabel(limits.state), observedAt: stored.observedAt,
                   fiveHour: limits.fiveHour, weekly: limits.sevenDay, message: message)
@@ -95,7 +112,32 @@ enum ClaudeLimitsReader {
         else { return nil }
         return StoredStatusLine(
             observedAt: Date(timeIntervalSince1970: observed),
-            rateLimits: rateLimits)
+            rateLimits: rateLimits,
+            source: .statusLineBridge)
+    }
+
+    /// Claude Desktop periodically appends `{t, org, u: {fh, sd}}` samples to
+    /// its own local history file — `fh`/`sd` are the five-hour/seven-day
+    /// used percentages, 0-100. No reset time is included, unlike the
+    /// statusLine bridge's `rate_limits` payload.
+    private static func readDesktopPlanUsage() -> StoredStatusLine? {
+        guard let data = try? Data(contentsOf: desktopPlanUsageURL),
+              let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let samples = record["samples"] as? [[String: Any]],
+              let last = samples.last,
+              let ms = number(last["t"]),
+              let usage = last["u"] as? [String: Any]
+        else { return nil }
+
+        var rateLimits: [String: Any] = [:]
+        if let fh = number(usage["fh"]) { rateLimits["five_hour"] = ["used_percentage": fh] }
+        if let sd = number(usage["sd"]) { rateLimits["seven_day"] = ["used_percentage": sd] }
+        guard !rateLimits.isEmpty else { return nil }
+
+        return StoredStatusLine(
+            observedAt: Date(timeIntervalSince1970: ms / 1000),
+            rateLimits: rateLimits,
+            source: .desktopApp)
     }
 
     private static func parseWindow(_ raw: Any?) -> LimitWindow? {
