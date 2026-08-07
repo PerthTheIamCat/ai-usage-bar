@@ -13,6 +13,9 @@ struct ModelTokens {
 /// content.
 struct SessionActivity: Identifiable {
     let id: String
+    /// Explicit title emitted by the provider, when available. This is
+    /// metadata only; prompt and tool input content never enters the model.
+    var name: String?
     var startedAt: Date?
     var lastActivityAt: Date?
     var tokenTotal = 0
@@ -27,12 +30,13 @@ struct SessionActivity: Identifiable {
     var tools: [String: Int] = [:]
     var toolCosts: [String: Double] = [:]
 
-    init(id: String, startedAt: Date? = nil, lastActivityAt: Date? = nil,
+    init(id: String, name: String? = nil, startedAt: Date? = nil, lastActivityAt: Date? = nil,
          tokenTotal: Int = 0, estimatedCostUSD: Double = 0, model: String? = nil,
          workspace: String? = nil, skills: [String: Int] = [:],
          skillCosts: [String: Double] = [:], inferredSkills: Set<String> = [],
          tools: [String: Int] = [:], toolCosts: [String: Double] = [:]) {
         self.id = id
+        self.name = name
         self.startedAt = startedAt
         self.lastActivityAt = lastActivityAt
         self.tokenTotal = tokenTotal

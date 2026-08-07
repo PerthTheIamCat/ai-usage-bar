@@ -18,9 +18,13 @@ enum UsageReader {
     ///   cost aggregates (see `periodCosts()`). Off by default since it's
     ///   meaningfully heavier than the today-only reads; the caller throttles
     ///   it on its own slower cadence.
-    static func snapshot(includePeriodStats: Bool = false) -> UsageSnapshot {
+    static func snapshot(
+        includePeriodStats: Bool = false,
+        progress: ((String) -> Void)? = nil
+    ) -> UsageSnapshot {
         let fm = FileManager.default
         var snap = UsageSnapshot()
+        progress?("Reading Claude logs…")
         if fm.fileExists(atPath: claudeDir.path) {
             snap.claude = readClaudeToday()
         }
@@ -33,6 +37,7 @@ enum UsageReader {
         {
             snap.claudeLimits = ClaudeLimitsReader.fetch()
         }
+        progress?("Reading Codex logs…")
         if fm.fileExists(atPath: codexDir.path) {
             let codexUsage = readCodexToday()
             let codexLimits = codexLimits()
@@ -44,14 +49,19 @@ enum UsageReader {
                 "codex: local sessions directory not found — expected ~/.codex/sessions",
                 signature: "missing")
         }
+        progress?("Reading Antigravity logs…")
         if fm.fileExists(atPath: antigravityDir.path) {
             snap.antigravity = readAntigravityToday()
         }
+        progress?("Reading activity timeline…")
         snap.hourlyUsage = readHourlyUsage()
         if includePeriodStats {
+            progress?("Calculating 7/30-day costs…")
             snap.periodCosts = periodCosts()
+            progress?("Calculating 30-day trend…")
             snap.dailyTrend = dailyTrend(days: 30)
         }
+        progress?("Updating display…")
         snap.updatedAt = Date()
         return snap
     }
@@ -105,7 +115,7 @@ enum UsageReader {
         if FileManager.default.fileExists(atPath: claudeDir.path) {
             for file in filesModifiedToday(under: claudeDir, ext: "jsonl") {
                 forEachLine(of: file) { line in
-                    guard line.contains("\"usage\""), line.contains("\"assistant\""),
+                    guard fastContains(line, "\"usage\""), fastContains(line, "\"assistant\""),
                           let data = line.data(using: .utf8),
                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                           (obj["type"] as? String) == "assistant",
@@ -129,7 +139,7 @@ enum UsageReader {
             for file in filesModifiedToday(under: codexDir, ext: "jsonl") {
                 var previous = 0
                 forEachLine(of: file) { line in
-                    guard line.contains("\"token_count\""),
+                    guard fastContains(line, "\"token_count\""),
                           let data = line.data(using: .utf8),
                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                           let ts = obj["timestamp"] as? String,
@@ -195,6 +205,40 @@ enum UsageReader {
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             body(String(line))
         }
+    }
+
+    /// `String.contains` does Unicode-correct (grapheme-cluster) comparison,
+    /// which is extremely slow on the multi-KB/MB JSONL lines these logs can
+    /// contain. All our marker checks are plain ASCII literals, so a manual
+    /// byte scan is orders of magnitude faster and avoids pegging the CPU
+    /// while scanning weeks of history.
+    private static func fastContains(_ haystack: String, _ needle: StaticString) -> Bool {
+        // `utf8Start` is only valid for the pointer representation, which
+        // every multi-character literal uses; a single-scalar literal would
+        // read garbage. All call sites pass multi-character markers, but
+        // guard it explicitly so a future one-character needle fails safe
+        // instead of hitting undefined behavior.
+        guard needle.hasPointerRepresentation else { return haystack.contains(needle.description) }
+        let needleBuffer = UnsafeBufferPointer(start: needle.utf8Start, count: needle.utf8CodeUnitCount)
+        return haystack.utf8.withContiguousStorageIfAvailable { hay -> Bool in
+            fastBytesContains(hay, needleBuffer)
+        } ?? haystack.contains(needle.description)
+    }
+
+    private static func fastBytesContains(_ haystack: UnsafeBufferPointer<UInt8>, _ needle: UnsafeBufferPointer<UInt8>) -> Bool {
+        guard let first = needle.first else { return true }
+        guard haystack.count >= needle.count else { return false }
+        let limit = haystack.count - needle.count
+        var i = 0
+        while i <= limit {
+            if haystack[i] == first {
+                var j = 1
+                while j < needle.count, haystack[i + j] == needle[j] { j += 1 }
+                if j == needle.count { return true }
+            }
+            i += 1
+        }
+        return false
     }
 
     private static let todayPrefixesUTC: [String] = {
@@ -266,7 +310,7 @@ enum UsageReader {
         for file in files {
             var fileMatched = false
             forEachLine(of: file) { line in
-                guard line.contains("\"usage\""), line.contains("\"assistant\"") else { return }
+                guard fastContains(line, "\"usage\""), fastContains(line, "\"assistant\"") else { return }
                 guard let data = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       (obj["type"] as? String) == "assistant",
@@ -354,12 +398,36 @@ enum UsageReader {
 
         for file in files {
             let sessionID = file.deletingPathExtension().lastPathComponent
+            var customName: String?
+            var generatedName: String?
+            var workspace: String?
             var requests: [String: ClaudeSessionRequest] = [:]
 
             forEachLine(of: file) { line in
                 guard let data = line.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      (obj["type"] as? String) == "assistant",
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { return }
+
+                // Claude stores session titles in lightweight metadata
+                // records: `custom-title` when the user renamed the session,
+                // `ai-title` for the automatic one. Both are titles rather
+                // than prompt text. Read them independently of today's usage
+                // filter so a session titled yesterday keeps its name when it
+                // is active today, and keep them apart so a later automatic
+                // title never overwrites a name the user chose.
+                switch obj["type"] as? String {
+                case "custom-title": customName = normalizedSessionName(obj["customTitle"]) ?? customName
+                case "ai-title": generatedName = normalizedSessionName(obj["aiTitle"]) ?? generatedName
+                default: break
+                }
+                if workspace == nil,
+                   let cwd = obj["cwd"] as? String,
+                   !cwd.isEmpty
+                {
+                    workspace = URL(fileURLWithPath: cwd).lastPathComponent
+                }
+
+                guard (obj["type"] as? String) == "assistant",
                       let timestamp = obj["timestamp"] as? String,
                       isIncluded(timestamp),
                       let message = obj["message"] as? [String: Any]
@@ -394,7 +462,7 @@ enum UsageReader {
             }
 
             guard !requests.isEmpty else { continue }
-            var session = SessionActivity(id: sessionID)
+            var session = SessionActivity(id: sessionID, name: customName ?? generatedName, workspace: workspace)
             for request in requests.values {
                 let date = parseISO(request.timestamp)
                 let isLatest: Bool
@@ -471,6 +539,12 @@ enum UsageReader {
         }
     }
 
+    private static func normalizedSessionName(_ value: Any?) -> String? {
+        guard let raw = value as? String else { return nil }
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
     /// Newest account-wide rate-limit snapshot Codex wrote to any recent
     /// session log. The 5h/weekly windows are account-global, so the freshest
     /// reading across all sessions is what we want (not just today's).
@@ -494,7 +568,7 @@ enum UsageReader {
             var found: [String: Any]?
             var foundTS: String?
             forEachLine(of: url) { line in
-                guard line.contains("\"rate_limits\""), line.contains("\"token_count\"") else { return }
+                guard fastContains(line, "\"rate_limits\""), fastContains(line, "\"token_count\"") else { return }
                 guard let data = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let payload = obj["payload"] as? [String: Any],
@@ -568,7 +642,7 @@ enum UsageReader {
             var last: [String: Int]?
             var lastTS: String?
             forEachLine(of: file) { line in
-                guard line.contains("\"token_count\"") else { return }
+                guard fastContains(line, "\"token_count\"") else { return }
                 guard let data = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let payload = obj["payload"] as? [String: Any],
@@ -613,6 +687,7 @@ enum UsageReader {
 
         for file in files {
             var sessionID = file.deletingPathExtension().lastPathComponent
+            var sessionName: String?
             var workspace: String?
             var model: String?
             var startedAt: Date?
@@ -636,6 +711,10 @@ enum UsageReader {
                         workspace = URL(fileURLWithPath: cwd).lastPathComponent
                     }
                     model = payload["model"] as? String ?? model
+                }
+
+                if let name = codexSessionName(in: obj, payload: payload) {
+                    sessionName = name
                 }
 
                 guard isIncluded(timestamp) else { return }
@@ -683,6 +762,7 @@ enum UsageReader {
             })
             let session = SessionActivity(
                 id: sessionID,
+                name: sessionName,
                 startedAt: startedAt,
                 lastActivityAt: lastActivityAt,
                 tokenTotal: tokenUsage.totalTokens,
@@ -704,6 +784,13 @@ enum UsageReader {
         codexSessionCache = (fingerprint, sorted)
         sessionCacheLock.unlock()
         return sorted
+    }
+
+    private static func codexSessionName(in object: [String: Any], payload: [String: Any]) -> String? {
+        guard object["type"] as? String == "event_msg",
+              payload["type"] as? String == "thread_name_updated"
+        else { return nil }
+        return normalizedSessionName(payload["thread_name"])
     }
 
     private static func filesFingerprint(_ files: [URL]) -> String {
@@ -863,7 +950,7 @@ enum UsageReader {
         var perKey: [String: (tokens: ModelTokens, model: String?, ts: String)] = [:]
         for file in files {
             forEachLine(of: file) { line in
-                guard line.contains("\"usage\""), line.contains("\"assistant\"") else { return }
+                guard fastContains(line, "\"usage\""), fastContains(line, "\"assistant\"") else { return }
                 guard let data = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       (obj["type"] as? String) == "assistant",
@@ -902,7 +989,7 @@ enum UsageReader {
             var last: [String: Int]?
             var lastTS: String?
             forEachLine(of: file) { line in
-                guard line.contains("\"token_count\"") else { return }
+                guard fastContains(line, "\"token_count\"") else { return }
                 guard let data = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let payload = obj["payload"] as? [String: Any],
