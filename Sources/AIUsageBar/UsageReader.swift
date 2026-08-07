@@ -12,6 +12,7 @@ enum UsageReader {
     private static var lastCodexLogSignature: String?
     private static let sessionCacheLock = NSLock()
     private static var claudeSessionCache: (fingerprint: String, value: [SessionActivity])?
+    private static var claudeTokenEventsCache: (fingerprint: String, value: [(date: Date, tokens: Int)])?
     private static var codexSessionCache: (fingerprint: String, value: [SessionActivity])?
 
     /// - Parameter includePeriodStats: when true, also computes the 7-/30-day
@@ -182,9 +183,32 @@ enum UsageReader {
     /// percent-per-token rate from the user's own consecutive samples rather
     /// than assuming one.
     static func claudeTokens(from: Date, to: Date) -> Int {
-        guard FileManager.default.fileExists(atPath: claudeDir.path), from < to else { return 0 }
+        guard from < to else { return 0 }
         var total = 0
-        for file in filesModifiedToday(under: claudeDir, ext: "jsonl") {
+        for event in claudeTokenEvents() where event.date > from && event.date <= to {
+            total += event.tokens
+        }
+        return total
+    }
+
+    /// Today's Claude token usage as timestamped events, from a single pass
+    /// over the logs and cached until those files change. The projection
+    /// calibrates across many intervals, and re-scanning the logs once per
+    /// interval would put back exactly the cost the byte scanner removed.
+    static func claudeTokenEvents() -> [(date: Date, tokens: Int)] {
+        guard FileManager.default.fileExists(atPath: claudeDir.path) else { return [] }
+        let files = filesModifiedToday(under: claudeDir, ext: "jsonl")
+        let fingerprint = filesFingerprint(files)
+
+        sessionCacheLock.lock()
+        if let cached = claudeTokenEventsCache, cached.fingerprint == fingerprint {
+            sessionCacheLock.unlock()
+            return cached.value
+        }
+        sessionCacheLock.unlock()
+
+        var events: [(date: Date, tokens: Int)] = []
+        for file in files {
             forEachLine(of: file) { line in
                 guard fastContains(line, "\"usage\""), fastContains(line, "\"assistant\""),
                       let data = line.data(using: .utf8),
@@ -192,15 +216,20 @@ enum UsageReader {
                       (obj["type"] as? String) == "assistant",
                       let ts = obj["timestamp"] as? String,
                       let date = parseISO(ts),
-                      date > from, date <= to,
                       let message = obj["message"] as? [String: Any],
                       let usage = message["usage"] as? [String: Any]
                 else { return }
-                total += ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
+                let tokens = ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
                     .reduce(0) { $0 + ((usage[$1] as? Int) ?? 0) }
+                if tokens > 0 { events.append((date: date, tokens: tokens)) }
             }
         }
-        return total
+        events.sort { $0.date < $1.date }
+
+        sessionCacheLock.lock()
+        claudeTokenEventsCache = (fingerprint, events)
+        sessionCacheLock.unlock()
+        return events
     }
 
     /// Files modified within the last `days` local days (1 = today only).

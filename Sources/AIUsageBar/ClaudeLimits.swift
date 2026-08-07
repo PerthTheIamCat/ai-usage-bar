@@ -31,9 +31,9 @@ enum ClaudeLimitsReader {
         var observedAt: Date
         var rateLimits: [String: Any]
         var source: ClaudeLimits.Source
-        /// Only the Desktop app keeps a history, so only it can be calibrated
-        /// against a previous sample.
-        var previous: (at: Date, fiveHourUsed: Double)?
+        /// Only the Desktop app keeps a history, so only it can be
+        /// calibrated against earlier samples. Oldest first, newest last.
+        var recentSamples: [(at: Date, fiveHourUsed: Double)] = []
     }
 
     static func fetch() -> ClaudeLimits {
@@ -149,18 +149,24 @@ enum ClaudeLimitsReader {
             observedAt: Date(timeIntervalSince1970: ms / 1000),
             rateLimits: rateLimits,
             source: .desktopApp,
-            previous: previousDesktopSample(samples))
+            recentSamples: recentDesktopSamples(samples))
     }
 
-    /// The sample before the newest one, used to calibrate the projection.
-    private static func previousDesktopSample(_ samples: [[String: Any]]) -> (at: Date, fiveHourUsed: Double)? {
-        guard samples.count >= 2 else { return nil }
-        let prior = samples[samples.count - 2]
-        guard let ms = number(prior["t"]),
-              let usage = prior["u"] as? [String: Any],
-              let fh = number(usage["fh"])
-        else { return nil }
-        return (Date(timeIntervalSince1970: ms / 1000), fh)
+    /// How many recent samples the projection calibrates against. Each new
+    /// reading pushes the oldest one out, so the rate keeps re-fitting to how
+    /// this account is actually being consumed rather than staying pinned to
+    /// whatever the first measurement happened to be.
+    private static let calibrationWindow = 16
+
+    /// The most recent samples, oldest first, newest last.
+    private static func recentDesktopSamples(_ samples: [[String: Any]]) -> [(at: Date, fiveHourUsed: Double)] {
+        samples.suffix(calibrationWindow).compactMap { sample in
+            guard let ms = number(sample["t"]),
+                  let usage = sample["u"] as? [String: Any],
+                  let fh = number(usage["fh"])
+            else { return nil }
+            return (Date(timeIntervalSince1970: ms / 1000), fh)
+        }
     }
 
     /// Projects the five-hour window forward from the newest sample using the
@@ -169,24 +175,38 @@ enum ClaudeLimitsReader {
     /// so it adapts to their plan and model mix instead of assuming a formula.
     /// Returns nil whenever there is nothing solid to calibrate against.
     private static func projectedFiveHour(_ measured: LimitWindow, stored: StoredStatusLine) -> LimitWindow? {
-        guard stored.source == .desktopApp,
-              let previous = stored.previous,
-              previous.at < stored.observedAt
-        else { return nil }
+        guard stored.source == .desktopApp else { return nil }
+        let samples = stored.recentSamples
+        guard samples.count >= 2 else { return nil }
 
-        let percentDelta = measured.usedPercent - previous.fiveHourUsed
-        guard percentDelta > 0 else { return nil }
-        let calibrationTokens = UsageReader.claudeTokens(from: previous.at, to: stored.observedAt)
-        guard calibrationTokens > 0 else { return nil }
+        // Fit the rate over every usable interval in the window rather than
+        // just the last one. Intervals where the percentage fell are skipped:
+        // the five-hour window had rolled over, so the drop says nothing about
+        // consumption per token.
+        // Token history only reaches back as far as the logs still on disk for
+        // today. An interval that starts before that would have its tokens
+        // undercounted and would fit an inflated rate, so leave it out.
+        guard let coverageStart = UsageReader.claudeTokenEvents().first?.date else { return nil }
+
+        var rates: [Double] = []
+        var deltas: [Double] = []
+        for (previous, current) in zip(samples, samples.dropFirst()) {
+            let percentDelta = current.fiveHourUsed - previous.fiveHourUsed
+            guard percentDelta > 0, previous.at < current.at, previous.at >= coverageStart else { continue }
+            let tokens = UsageReader.claudeTokens(from: previous.at, to: current.at)
+            guard tokens > 0 else { continue }
+            rates.append(percentDelta / Double(tokens))
+            deltas.append(percentDelta)
+        }
+        guard let ratePerToken = median(rates), let typicalDelta = median(deltas) else { return nil }
 
         let sinceTokens = UsageReader.claudeTokens(from: stored.observedAt, to: Date())
         guard sinceTokens > 0 else { return nil }
 
-        let ratePerToken = percentDelta / Double(calibrationTokens)
-        // A calibration window that moved a lot on very few tokens would give
-        // a wild rate, so never project further than one interval's worth of
-        // movement past the sample — a real reading lands before then anyway.
-        let ceiling = measured.usedPercent + percentDelta
+        // Never project further than a typical interval's movement past the
+        // sample — a real reading lands before then anyway, and that bounds
+        // how wrong a single odd interval can make this.
+        let ceiling = measured.usedPercent + typicalDelta
         let projected = min(measured.usedPercent + ratePerToken * Double(sinceTokens), ceiling)
         guard projected > measured.usedPercent else { return nil }
 
@@ -194,6 +214,17 @@ enum ClaudeLimitsReader {
         window.usedPercent = min(100, projected)
         window.isEstimated = true
         return window
+    }
+
+    /// Median rather than mean: one interval with an unusual mix of models, or
+    /// usage from a device this Mac cannot see, would drag an average around.
+    private static func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let middle = sorted.count / 2
+        return sorted.count.isMultiple(of: 2)
+            ? (sorted[middle - 1] + sorted[middle]) / 2
+            : sorted[middle]
     }
 
     private static func parseWindow(_ raw: Any?) -> LimitWindow? {

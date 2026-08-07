@@ -2,6 +2,23 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.10.2] - 2026-08-08
+
+### Changed
+
+- The projected five-hour figure now re-fits itself continuously. It used to
+  derive its percent-per-token rate from the single previous interval, which
+  made it swing with whatever that one interval happened to contain. It now
+  fits across the last 16 readings, takes the median so an unusual interval
+  cannot drag it, skips intervals where the window rolled over or where the
+  token history does not reach back far enough, and re-fits every time a new
+  real reading lands. Backtested against recorded samples, mean absolute
+  error dropped from 3.5 to 1.9 percentage points and the worst case from
+  12.0 to 8.9.
+- Token history for today is now gathered in one cached pass instead of a
+  fresh log scan per interval, so fitting over many intervals costs no more
+  than fitting over one.
+
 ## [0.10.1] - 2026-08-08
 
 ### Fixed
