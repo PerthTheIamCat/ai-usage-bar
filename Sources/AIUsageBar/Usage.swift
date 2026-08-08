@@ -87,6 +87,12 @@ struct AntigravityUsage {
     var sessionCount = 0
     var fiveHour: LimitWindow?
     var weekly: LimitWindow?
+    /// Modification time of whichever quota cache file the limits came from.
+    /// Unlike Claude and Codex, Antigravity's quota files carry no reading
+    /// timestamp of their own, so this is the only freshness signal
+    /// available — without it a quota from hours ago (Antigravity closed,
+    /// no fresher file written since) looks identical to a live one.
+    var asOf: Date?
     var isWorking = false
 }
 

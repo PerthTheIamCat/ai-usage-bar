@@ -418,6 +418,36 @@ private struct HeroRemainingCard: View {
     }
 }
 
+/// "Use the other one for now" — only shown when the tightest provider is
+/// genuinely low AND another provider has a real margin over it. Tapping
+/// jumps straight to that provider's pane, same as tapping its card.
+private struct SwitchSuggestionBanner: View {
+    let title: String
+    let remainingPercent: Double
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("\(title) has \(Int(remainingPercent.rounded()))% left — switch there for now")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(Color.accentColor)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .panelSurface(cornerRadius: 10, opacity: 0.12)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct OverviewPane: View {
     let snap: UsageSnapshot
     let claudeLimitsProblem: String?
@@ -475,8 +505,8 @@ struct OverviewPane: View {
     /// The single tightest (lowest-remaining) window across every card,
     /// ignoring ones already past their reset (meaningless) or hidden by a
     /// problem state.
-    private var tightest: (title: String, label: String, window: LimitWindow)? {
-        var best: (title: String, label: String, window: LimitWindow)?
+    private var tightest: (kind: ProviderKind, title: String, label: String, window: LimitWindow)? {
+        var best: (kind: ProviderKind, title: String, label: String, window: LimitWindow)?
         for card in cards {
             for (label, w) in [("5-hour", card.fiveHour), ("Weekly", card.weekly)] {
                 // Skip only windows already known to have rolled over. A nil
@@ -486,9 +516,30 @@ struct OverviewPane: View {
                 guard let w else { continue }
                 if let reset = w.resetsAt, reset <= Date() { continue }
                 if let current = best, current.window.remainingPercent <= w.remainingPercent { continue }
-                best = (card.title, label, w)
+                best = (card.kind, card.title, label, w)
             }
         }
+        return best
+    }
+
+    /// The best case for "switch to this instead" among every OTHER
+    /// provider's tightest window. Only surfaced when the current top pick
+    /// is genuinely tight and the alternative has a real margin over it —
+    /// otherwise this would just be noise on every visit to Overview.
+    private var switchSuggestion: (kind: ProviderKind, title: String, remainingPercent: Double)? {
+        guard let tightest, tightest.window.remainingPercent < AppSettings.shared.warnBelowRemaining else { return nil }
+        var best: (kind: ProviderKind, title: String, remainingPercent: Double)?
+        for card in cards where card.kind != tightest.kind {
+            for w in [card.fiveHour, card.weekly].compactMap({ $0 }) {
+                // Same rule as `tightest`: no reset time means "unknown", not
+                // "expired" — only skip a window already known to have rolled over.
+                if let reset = w.resetsAt, reset <= Date() { continue }
+                if best == nil || w.remainingPercent > best!.remainingPercent {
+                    best = (card.kind, card.title, w.remainingPercent)
+                }
+            }
+        }
+        guard let best, best.remainingPercent - tightest.window.remainingPercent >= 30 else { return nil }
         return best
     }
 
@@ -499,6 +550,12 @@ struct OverviewPane: View {
 
                 if let tightest {
                     HeroRemainingCard(providerTitle: tightest.title, windowLabel: tightest.label, window: tightest.window)
+                }
+
+                if let suggestion = switchSuggestion {
+                    SwitchSuggestionBanner(
+                        title: suggestion.title, remainingPercent: suggestion.remainingPercent,
+                        onTap: { onSelectProvider(suggestion.kind) })
                 }
 
                 if cards.isEmpty {
@@ -745,6 +802,14 @@ struct AntigravityPane: View {
         if fiveHour == nil && weekly == nil {
             NoteText(text: "No quota data yet — use Antigravity once to refresh it")
         } else {
+            // Codex already states its reading's age plainly instead of
+            // presenting it as live. Antigravity's quota cache carries no
+            // timestamp of its own — this is the file's mtime — but a
+            // reading from an hour ago should read that way too, not look
+            // identical to one from just now.
+            if let asOf = g.asOf {
+                CaptionText(title: "Limits · as of \(humanAgo(asOf))")
+            }
             if let w = fiveHour { limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour) }
             if let w = weekly { limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly) }
         }

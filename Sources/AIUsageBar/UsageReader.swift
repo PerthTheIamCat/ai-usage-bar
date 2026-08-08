@@ -345,13 +345,6 @@ enum UsageReader {
                    includeSessions: true)
     }
 
-    /// 7-/30-day aggregate for the period-cost rows. `daysBack` is inclusive
-    /// of today (7 = today + 6 previous days).
-    private static func readClaude(daysBack: Int) -> ClaudeUsage {
-        readClaude(matching: { isWithinLastDays(isoTimestamp: $0, days: daysBack) },
-                   files: filesModified(under: claudeDir, ext: "jsonl", sinceDaysAgo: daysBack))
-    }
-
     private static func readClaude(
         matching isIncluded: (String) -> Bool,
         files: [URL],
@@ -681,12 +674,6 @@ enum UsageReader {
                   includeSessions: true)
     }
 
-    /// 7-/30-day aggregate for the period-cost rows (see `readClaude(daysBack:)`).
-    private static func readCodex(daysBack: Int) -> CodexUsage {
-        readCodex(matching: { isWithinLastDays(isoTimestamp: $0, days: daysBack) },
-                  files: filesModified(under: codexDir, ext: "jsonl", sinceDaysAgo: daysBack))
-    }
-
     private static func readCodex(
         matching isIncluded: (String) -> Bool,
         files: [URL],
@@ -889,8 +876,11 @@ enum UsageReader {
     private static func readAntigravityToday() -> AntigravityUsage {
         var usage = AntigravityUsage()
         let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
-        usage.fiveHour = readAntigravityLimit(shortWindow: true)
-        usage.weekly = readAntigravityLimit(shortWindow: false)
+        let five = readAntigravityLimit(shortWindow: true)
+        let weekly = readAntigravityLimit(shortWindow: false)
+        usage.fiveHour = five?.window
+        usage.weekly = weekly?.window
+        usage.asOf = [five?.asOf, weekly?.asOf].compactMap { $0 }.max()
         guard FileManager.default.fileExists(atPath: historyFile.path) else {
             usage.isWorking = antigravityIsWorking()
             return usage
@@ -916,41 +906,32 @@ enum UsageReader {
 
     /// Prompt count over the last `daysBack` local days, for the 7-/30-day
     /// cost rows (Antigravity cost is priced per prompt, see Pricing.swift).
-    private static func antigravityPromptCount(daysBack: Int) -> Int {
-        let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
-        guard FileManager.default.fileExists(atPath: historyFile.path) else { return 0 }
-        let cutoff = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-Double(daysBack - 1) * 86400)
-        var count = 0
-        forEachLine(of: historyFile) { line in
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let timestampMS = obj["timestamp"] as? Double
-            else { return }
-            if Date(timeIntervalSince1970: timestampMS / 1000.0) >= cutoff { count += 1 }
-        }
-        return count
-    }
-
     /// 7-/30-day cumulative estimated cost per provider, for the dropdown's
     /// period-cost rows. Meaningfully heavier than the today-only reads (scans
     /// up to 30 days of logs), so callers should throttle this independently
     /// — see `includePeriodStats` on `snapshot(_:_:)`.
+    /// Derived from `dailyTrend`'s own 30-day scan rather than a second,
+    /// independent one — the per-day buckets it builds already apply the
+    /// same per-model/per-token pricing this used to redo from scratch, so
+    /// summing them is exactly equivalent, not an approximation. That also
+    /// means this inherits `dailyTrend`'s backfill: a day whose log Claude
+    /// has since pruned still counts here instead of quietly dropping out of
+    /// the 7-/30-day totals.
     static func periodCosts() -> PeriodCosts {
         let fm = FileManager.default
+        let trend = dailyTrend(days: 30)
         var out = PeriodCosts()
         if fm.fileExists(atPath: claudeDir.path) {
-            out.claudeUSD7 = Pricing.claudeCostUSD(readClaude(daysBack: 7))
-            out.claudeUSD30 = Pricing.claudeCostUSD(readClaude(daysBack: 30))
+            out.claudeUSD7 = trend.claudeCostUSD.suffix(7).reduce(0, +)
+            out.claudeUSD30 = trend.claudeCostUSD.reduce(0, +)
         }
         if fm.fileExists(atPath: codexDir.path) {
-            out.codexUSD7 = Pricing.codexCostUSD(readCodex(daysBack: 7))
-            out.codexUSD30 = Pricing.codexCostUSD(readCodex(daysBack: 30))
+            out.codexUSD7 = trend.codexCostUSD.suffix(7).reduce(0, +)
+            out.codexUSD30 = trend.codexCostUSD.reduce(0, +)
         }
         if fm.fileExists(atPath: antigravityDir.path) {
-            var u7 = AntigravityUsage(); u7.totalPrompts = antigravityPromptCount(daysBack: 7)
-            var u30 = AntigravityUsage(); u30.totalPrompts = antigravityPromptCount(daysBack: 30)
-            out.antigravityUSD7 = Pricing.antigravityCostUSD(u7)
-            out.antigravityUSD30 = Pricing.antigravityCostUSD(u30)
+            out.antigravityUSD7 = trend.antigravityCostUSD.suffix(7).reduce(0, +)
+            out.antigravityUSD30 = trend.antigravityCostUSD.reduce(0, +)
         }
         return out
     }
@@ -988,7 +969,13 @@ enum UsageReader {
             out.antigravityPrompts = Array(repeating: 0, count: days)
             out.antigravityCostUSD = Array(repeating: 0, count: days)
         }
-        return out
+
+        // Persist whatever this pass just measured while the source logs
+        // still have it, then fill in any day the scan came back empty for
+        // with whatever was captured before that day's log aged out and got
+        // pruned. See DailyHistoryStore for why this exists at all.
+        DailyHistoryStore.record(out)
+        return DailyHistoryStore.backfill(out)
     }
 
     /// Index into a `days`-length bucket array (0 = oldest, `days - 1` =
@@ -1102,7 +1089,7 @@ enum UsageReader {
     /// CLI versions. Read only JSON responses that contain the stable
     /// remainingFraction/resetTime pair, and classify the two windows by the
     /// time until reset (short = 5-hour, long = weekly).
-    private static func readAntigravityLimit(shortWindow: Bool) -> LimitWindow? {
+    private static func readAntigravityLimit(shortWindow: Bool) -> (window: LimitWindow, asOf: Date)? {
         let fm = FileManager.default
         let roots = [
             antigravityDir.appendingPathComponent("cache"),
@@ -1135,7 +1122,7 @@ enum UsageReader {
                 }
             }
         }
-        return newest?.window
+        return newest.map { ($0.window, $0.modified) }
     }
 
     private static func quotaCandidates(in object: Any) -> [(remaining: Double, reset: Date)] {
