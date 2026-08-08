@@ -13,7 +13,14 @@ on:
 
 jobs:
   publish:
-    runs-on: macos-14
+    # Needs the macOS 26 SDK to compile the Liquid Glass code path (it's
+    # gated behind `@available(macOS 26.0, *)` for runtime safety, but the
+    # compiler still needs the SDK the symbol was declared in to resolve it
+    # at all — an availability guard doesn't help if the symbol doesn't
+    # exist in the SDK being compiled against). macos-14 predates macOS 26
+    # entirely and is being deprecated; macos-26 ships Xcode 26 with the
+    # matching SDK preinstalled.
+    runs-on: macos-26
     permissions:
       contents: write
 

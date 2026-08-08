@@ -2,6 +2,19 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.10.5] - 2026-08-08
+
+### Fixed
+
+- The 0.10.4 release build failed in CI: the workflow ran on `macos-14`,
+  whose bundled Xcode predates the macOS 26 SDK entirely, so the Liquid
+  Glass code introduced in 0.10.4 failed to compile there — an
+  `@available(macOS 26.0, *)` guard makes a call safe at *runtime* on older
+  systems, but the *compiler* still needs the SDK that declared the symbol
+  to resolve it in the first place, regardless of the guard. `macos-14` is
+  also being deprecated by GitHub. Moved to `macos-26`, which ships Xcode 26
+  and the matching SDK preinstalled.
+
 ## [0.10.4] - 2026-08-08
 
 ### Added
