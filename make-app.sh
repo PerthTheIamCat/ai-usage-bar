@@ -35,6 +35,13 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resourc
 cp .build/release/AIUsageBar "$APP/Contents/MacOS/AIUsageBar"
 cp -R "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# Resources/AppIcon.icon is the newer macOS 26 Icon Composer source (adaptive
+# Liquid Glass layers: same design as AppIcon.icns, split into background/
+# gloss/meter/sparkle so the system can relight it per appearance mode). Not
+# used by this build yet — `actool` silently no-ops on a bare .icon file
+# outside a real Xcode project's asset-catalog import step, and this project
+# has no Xcode project. Kept as the source of truth for whenever that gap
+# closes; drag it into an .xcassets catalog in Xcode to use it directly.
 cp CHANGELOG.md "$APP/Contents/Resources/CHANGELOG.md"
 # SwiftPM links Sparkle through @rpath but does not add the app-bundle framework
 # location. Add it before signing so launchd and Finder can load the copy above.
