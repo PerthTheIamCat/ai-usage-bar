@@ -2,6 +2,37 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## Unreleased
+
+### Added
+
+- **"Switch there for now."** When one provider is critically low and another
+  has a real margin over it, the Overview pane suggests switching, with a tap
+  target straight to that provider's pane. Only fires when the gap is wide
+  enough (30+ points) to be worth the suggestion.
+- **Antigravity now shows a reading age.** Its quota cache carries no
+  timestamp of its own; the file's modification time is used instead, and
+  reads the same "as of X ago" way Codex's already did — a stale Antigravity
+  reading no longer looks identical to a live one.
+- **Local history survives log pruning.** Claude Code (and Codex) delete
+  local session logs after roughly a month; the 7-/30-day cost totals and the
+  Analytics trend chart used to rescan those logs from scratch every time, so
+  a day quietly went to zero forever the moment its file aged out — even a
+  day the app had measured correctly, repeatedly, in the weeks before. Each
+  day's totals are now captured to a local file the first time they're seen
+  with real activity, and a rescan that comes back empty for a day falls back
+  to what was captured before that day's log was pruned. On this machine the
+  very first run recovered 20 days of history, some already within a week of
+  its likely prune date.
+
+### Changed
+
+- The 7-/30-day cost totals are now derived from the same 30-day scan the
+  trend chart already does, instead of running a second independent one —
+  the per-day buckets already apply full per-model pricing, so summing them
+  is exactly equivalent, and it removes a redundant full log walk every time
+  historical stats are calculated.
+
 ## [0.10.3] - 2026-08-08
 
 ### Added
