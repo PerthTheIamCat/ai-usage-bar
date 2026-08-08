@@ -2,6 +2,28 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.10.6] - 2026-08-08
+
+### Added
+
+- The macOS 26 Icon Composer source for the app icon (`Resources/AppIcon.icon`)
+  — same design as the shipping `.icns`, split into background/gloss/meter/
+  sparkle layers so it can be relit per appearance mode once this project has
+  an Xcode target to import it through. Not wired into this build yet:
+  `actool` accepts a bare `.icon` file dropped into a minimal asset catalog
+  without error, but produces no output — confirmed directly, not assumed.
+  Xcode's project system does real import work when you drag a `.icon` file
+  in that a standalone tool invocation doesn't replicate.
+
+### Fixed
+
+- Codex's 5-hour window could sit under the low-remaining threshold
+  indefinitely with no alert — only its weekly window was checked. Same
+  currently-inert-on-most-accounts caveat as the existing depletion check for
+  it: Codex retired the 5-hour window for most plans, so this mostly won't
+  fire today, but costs nothing to have ready for a plan that still reports
+  one.
+
 ## [0.10.5] - 2026-08-08
 
 ### Fixed
