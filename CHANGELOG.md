@@ -2,7 +2,7 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
-## Unreleased
+## [0.10.4] - 2026-08-08
 
 ### Added
 
@@ -24,6 +24,18 @@ All notable changes to AI Usage Bar are documented in this file.
   to what was captured before that day's log was pruned. On this machine the
   very first run recovered 20 days of history, some already within a week of
   its likely prune date.
+- **A real test suite.** 29 tests covering the burn-rate regression, the
+  daily-history record/backfill logic, the byte-scan log scanner against
+  `String.contains`, and Claude's median calibration — all converted from
+  one-off scratch checks that were previously written, run once, and thrown
+  away. `BurnRateTracker` and `DailyHistoryStore` now take an injectable
+  backing store so tests never touch this Mac's real UserDefaults or files.
+- **Liquid Glass on macOS 26.** The popover's cards (provider cards, the hero
+  card, the switch-provider banner) now render with real `.glassEffect()`
+  material — verified against the actual macOS 26 SDK before shipping, not
+  assumed. Falls back to the previous translucent treatment on anything
+  earlier; nothing regresses for anyone not yet on Tahoe. The two tappable
+  panels use the interactive glass variant for real press-down feedback.
 
 ### Changed
 
@@ -32,6 +44,22 @@ All notable changes to AI Usage Bar are documented in this file.
   the per-day buckets already apply full per-model pricing, so summing them
   is exactly equivalent, and it removes a redundant full log walk every time
   historical stats are calculated.
+
+### Fixed
+
+- The Claude five-hour projection re-derived its token-event list — which
+  means re-walking and re-fingerprinting the entire `~/.claude/projects`
+  tree — once per calibration interval, up to ~17 times per reading. The
+  underlying files cannot change mid-calculation, so this was pure waste that
+  would have compounded as the log tree grows over months; found during a
+  live CPU/security audit prompted directly by a concern about the app
+  pegging a core again. Now scanned once per calibration.
+- The Antigravity working-indicator's icon animation ran a timer at 12.5 Hz
+  unconditionally from launch, forever, gated only by an internal check that
+  no-opped whenever Antigravity wasn't actually active — which is most of the
+  time for most people. It now starts only when Antigravity starts working
+  and stops the moment it's done, instead of running at all times and
+  silently discarding almost every tick.
 
 ## [0.10.3] - 2026-08-08
 

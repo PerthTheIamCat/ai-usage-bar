@@ -1,6 +1,6 @@
 # AI Usage Bar
 
-> See Claude Code and Codex usage before a limit surprises you.
+> See Claude, Codex, and Antigravity usage before a limit surprises you.
 
 AI Usage Bar is a small macOS menu-bar app for people who use Claude Code,
 Codex, Antigravity, or any combination of the three. It shows today's token
@@ -11,24 +11,31 @@ rate-limit window.
 · [Report an issue](https://github.com/PerthTheIamCat/ai-usage-bar/issues)
 
 **Requirements:** macOS 13 or later · Apple Silicon · at least one supported
-provider already installed and signed in.
+provider already installed and signed in. On macOS 26 (Tahoe) the popover's
+panels render as real Liquid Glass; earlier versions get an equivalent
+translucent treatment with no missing functionality.
 
 ## What it shows
 
 `✳ 42%  ◇ 63%` in the menu bar means the tightest remaining limit for the
-detected providers. Click it for the full picture:
+detected providers. Click it and the popover opens on **Overview** — the
+question it exists to answer, and nothing else:
 
-- **Rate limits** — remaining percentage, 5-hour and weekly windows, a compact
-  meter, and reset time.
-- **Today's tokens** — input, output, cache, reasoning, session count, and the
-  most recent model.
-- **Freshness** — when a value was last updated, so an old Codex session does
-  not look like a current limit reading.
-- **Session explorer** — expand today's Claude Code and Codex sessions to see
-  the skills and tools used, with an estimated cost for each session, skill,
-  and tool.
+- **Lowest remaining** — a headline ring for the single tightest window across
+  every provider, so "how much do I have left right now" never needs
+  hunting for.
+- **A card per provider** — 5-hour and weekly meters, reset time, and today's
+  tokens/cost, nothing more.
+- **A depletion warning** when the current pace projects hitting a window's
+  limit before it resets — fit from recent readings, not a fixed guess.
+- **"Switch there for now"** when one provider is critically low and another
+  has real headroom, with a tap straight to it.
 
-No setup screen. The app detects the CLIs from `~/.claude` and `~/.codex`.
+Tap a provider's card for the full detail pane: token breakdown, today's
+sessions (skills and tools used, with a per-item cost estimate), model
+breakdown, and 7-/30-day cost trends — all one click away rather than the
+default view. No setup screen for the app itself; it detects the CLIs from
+`~/.claude` and `~/.codex` on its own.
 
 ## Install and use
 
@@ -39,12 +46,19 @@ No setup screen. The app detects the CLIs from `~/.claude` and `~/.codex`.
 3. Open `AIUsageBar.app`.
    - Current preview builds use ad-hoc signing. If macOS blocks the first
      launch, Control-click the app, choose **Open**, then confirm **Open**.
-4. Configure the Claude Code local status-line bridge once. From a source
-   checkout, run `./Scripts/install-claude-statusline.sh` after placing the
-   app in `/Applications`. For a custom app location, set `AI_USAGE_BAR_BIN`
-   to the app executable before running the installer. The installer only
-   installs the bridge script and prints the `statusLine` snippet; it never
-   modifies an existing Claude Code configuration.
+4. Claude reads work differently depending on how you use Claude:
+   - **Claude Desktop app** — nothing to configure. AI Usage Bar reads its
+     local plan-usage file directly; open the popover after using Claude once
+     and a reading appears.
+   - **Claude Code (CLI)** — needs the local statusLine bridge once. The
+     popover's Overview pane shows a **Set Up Status Line Bridge** button when
+     no reading exists yet; it installs the bridge script and adds the
+     `statusLine` entry to `~/.claude/settings.json` itself, backing the file
+     up first and never touching an existing different `statusLine` command.
+     To do it by hand instead, run `./Scripts/install-claude-statusline.sh`
+     after placing the app in `/Applications` (set `AI_USAGE_BAR_BIN` first
+     for a custom app location) — it only installs the bridge script and
+     prints the snippet to add yourself.
 5. Click the menu-bar icon whenever you want the detailed breakdown. Press
    `⌘R` or choose **Refresh Now** to reread local snapshots.
 6. From version 0.2.0 onward, the app checks for updates automatically. Use
@@ -57,33 +71,46 @@ To start it automatically: **System Settings → General → Login Items → Add
 
 | Provider | Today's usage | Rate-limit reading |
 | --- | --- | --- |
-| Claude | Local Claude Code session logs | Local snapshot supplied by Claude Code `statusLine` |
+| Claude | Local Claude Code session logs | Claude Code's local `statusLine` snapshot, or the Claude Desktop app's own local usage file — whichever is fresher |
 | Codex | Local Codex session logs | Latest `rate_limits` entry written by Codex |
 | Antigravity | Local activity data | Local quota snapshot |
 
 The app never reads, refreshes, rotates, or writes Claude credentials. Claude
 limit snapshots contain only the `rate_limits` fields supplied to the local
-status-line command; prompt and transcript content is not stored by the
-bridge. Codex readings are local and are only as fresh as the latest Codex
-session that wrote them.
+status-line command (or the used-percentage fields from the Desktop app's own
+file); prompt and transcript content is never stored. Codex readings are
+local and are only as fresh as the latest Codex session that wrote them.
 
-Claude limits are reread from the local snapshot every minute. If Claude Code
-has not supplied a newer snapshot for 30 minutes, AI Usage Bar marks it stale
-and keeps the last known value; it never falls back to an HTTP request.
-Claude Code's documented `statusLine` input includes the 5-hour and 7-day
-`rate_limits` fields. See the [Claude Code status line documentation](https://code.claude.com/docs/en/statusline).
+Both Claude sources are watched directly, so a new reading is picked up
+within seconds rather than waiting for the next refresh. If neither source
+has supplied one for 30 minutes, AI Usage Bar marks it stale and keeps the
+last known value; it never falls back to an HTTP request. The Desktop app
+samples every few minutes rather than continuously — between its samples,
+the 5-hour figure is projected forward from Claude Code tokens logged since
+the last sample (shown with a leading `~`), calibrated from your own recent
+readings rather than an assumed formula. The Desktop app's file carries no
+reset time, unlike the statusLine bridge's `rate_limits` payload, so a
+Desktop-only reading has no "resets in" caption. See the
+[Claude Code status line documentation](https://code.claude.com/docs/en/statusline).
 
-The provider panes show the three most recent sessions first; choose **Show all**
-to expand the complete list. Explicit Claude `customTitle` and Codex
-`thread_name_updated` metadata are shown as session titles when available,
-with a workspace/ID fallback when a provider has not supplied one. Expand an
-individual session to see the named Claude skills and tools recorded in its
-local log. Codex tool calls are read from `function_call` /
-`custom_tool_call` records; Codex skills are marked **inferred** when a tool
-argument references a `SKILL.md` file because Codex does not emit a dedicated
-skill event. Only session titles, IDs, timestamps, token totals, names, counts,
-and derived cost estimates are used for this view — prompt text and tool
-arguments are not saved or displayed by AI Usage Bar.
+The provider panes show the three most recent sessions today; the full list
+is available through **Export…**. Claude session titles use the manually-set
+`customTitle` when present, falling back to Claude's automatic `ai-title`;
+Codex sessions fall back to the workspace name, since Codex does not write a
+title of its own. Expand an individual session to see the named Claude
+skills and tools recorded in its local log. Codex tool calls are read from
+`function_call` / `custom_tool_call` records; Codex skills are marked
+**inferred** when a tool argument references a `SKILL.md` file because Codex
+does not emit a dedicated skill event. Only session titles, IDs, timestamps,
+token totals, names, counts, and derived cost estimates are used for this
+view — prompt text and tool arguments are not saved or displayed by AI Usage
+Bar.
+
+Claude's 7-/30-day cost totals and the Analytics trend chart are backed by a
+local day-by-day history file. Claude Code (and Codex) prune local session
+logs after roughly a month; each day's totals are captured to that file the
+first time they're observed with real activity, so a day's numbers survive
+even after its source log is gone.
 
 ## Customize providers and reports
 
@@ -110,9 +137,19 @@ loading phase while that background work runs.
 - Release builds currently target Apple Silicon (`arm64`) only.
 - A Codex limit window may be stale until you open Codex again.
 - Claude limit data may be stale until Claude Code produces another
-  status-line update.
+  status-line update, or the Desktop app writes its next sample.
+- The depletion warning and the between-sample Claude projection are both
+  fit from your own recent readings, not a published formula — early on, or
+  right after a long idle stretch, there may not be enough recent signal for
+  either to say anything yet.
 - Preview releases are not yet Developer ID signed or notarized. The first
   install may still need the Control-click → **Open** step above.
+- **Updating from a version before 0.10.0**: the app's bundle identifier
+  changed (a macOS-side issue was preventing some installs from ever getting
+  a menu bar icon at all — see the 0.10.0 release notes). The in-app updater
+  cannot bridge that change, so update by downloading the ZIP and replacing
+  `AIUsageBar.app` by hand once; your settings carry over automatically on
+  first launch.
 
 ## Build from source
 
@@ -123,6 +160,10 @@ open AIUsageBar.app
 
 # Print current readings without opening the menu-bar UI
 .build/release/AIUsageBar --dump
+
+# Run the test suite (pure-logic coverage: burn-rate regression, the daily-
+# history backfill, the byte-scan log scanner, Claude's calibration math)
+swift test
 ```
 
 ## Releases for maintainers
