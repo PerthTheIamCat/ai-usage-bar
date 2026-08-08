@@ -51,6 +51,7 @@ final class UsageNotifier {
         let warnBelow = AppSettings.shared.warnBelowRemaining
         checkWindow(key: "claude-5h", name: "Claude 5-hour window", window: snap.claudeLimits?.fiveHour, warnBelow: warnBelow)
         checkWindow(key: "claude-week", name: "Claude weekly window", window: snap.claudeLimits?.sevenDay, warnBelow: warnBelow)
+        checkWindow(key: "codex-5h", name: "Codex 5-hour window", window: snap.codexLimits?.primary, warnBelow: warnBelow)
         checkWindow(key: "codex-week", name: "Codex weekly window", window: snap.codexLimits?.secondary, warnBelow: warnBelow)
         checkWindow(key: "antigravity-5h", name: "Antigravity 5-hour window", window: snap.antigravity?.fiveHour, warnBelow: warnBelow)
         checkWindow(key: "antigravity-week", name: "Antigravity weekly window", window: snap.antigravity?.weekly, warnBelow: warnBelow)
