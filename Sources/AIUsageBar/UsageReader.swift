@@ -268,7 +268,10 @@ enum UsageReader {
     /// contain. All our marker checks are plain ASCII literals, so a manual
     /// byte scan is orders of magnitude faster and avoids pegging the CPU
     /// while scanning weeks of history.
-    private static func fastContains(_ haystack: String, _ needle: StaticString) -> Bool {
+    // Internal rather than private so the byte scanner's correctness against
+    // `String.contains` can be tested directly instead of only indirectly
+    // through a full log-parsing call.
+    static func fastContains(_ haystack: String, _ needle: StaticString) -> Bool {
         // `utf8Start` is only valid for the pointer representation, which
         // every multi-character literal uses; a single-scalar literal would
         // read garbage. All call sites pass multi-character markers, but

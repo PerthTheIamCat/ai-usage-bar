@@ -34,23 +34,24 @@ enum BurnRateTracker {
         "burnRateSamples.\(provider.rawValue).\(window.rawValue)"
     }
 
-    private static func load(_ provider: ProviderKind, _ window: LimitWindowKind) -> [Sample] {
-        guard let data = UserDefaults.standard.data(forKey: key(provider, window)),
+    private static func load(_ provider: ProviderKind, _ window: LimitWindowKind, _ defaults: UserDefaults) -> [Sample] {
+        guard let data = defaults.data(forKey: key(provider, window)),
               let samples = try? JSONDecoder().decode([Sample].self, from: data)
         else { return [] }
         return samples
     }
 
-    private static func save(_ provider: ProviderKind, _ window: LimitWindowKind, _ samples: [Sample]) {
+    private static func save(_ provider: ProviderKind, _ window: LimitWindowKind, _ samples: [Sample], _ defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(samples) else { return }
-        UserDefaults.standard.set(data, forKey: key(provider, window))
+        defaults.set(data, forKey: key(provider, window))
     }
 
     /// Call once per refresh with whatever `usedPercent` is currently shown
     /// for that provider/window. Cheap — this only ever touches a handful of
-    /// small values, never the logs.
-    static func record(_ provider: ProviderKind, _ window: LimitWindowKind, usedPercent: Double, at: Date = Date()) {
-        var samples = load(provider, window)
+    /// small values, never the logs. `defaults` is only ever overridden by
+    /// tests, to keep them from reading or writing this Mac's real state.
+    static func record(_ provider: ProviderKind, _ window: LimitWindowKind, usedPercent: Double, at: Date = Date(), defaults: UserDefaults = .standard) {
+        var samples = load(provider, window, defaults)
         if let last = samples.last {
             // A drop of more than a couple of points means the window rolled
             // over (or a stale-data fallback replaced a fresher reading) —
@@ -67,13 +68,13 @@ enum BurnRateTracker {
         if samples.count > maxSamples {
             samples.removeFirst(samples.count - maxSamples)
         }
-        save(provider, window, samples)
+        save(provider, window, samples, defaults)
     }
 
     /// nil whenever there isn't enough recent signal to say anything, or the
     /// window isn't actually climbing toward full.
-    static func forecast(_ provider: ProviderKind, _ window: LimitWindowKind, resetsAt: Date?, now: Date = Date()) -> Forecast? {
-        let recent = load(provider, window).filter { now.timeIntervalSince($0.at) <= lookback }
+    static func forecast(_ provider: ProviderKind, _ window: LimitWindowKind, resetsAt: Date?, now: Date = Date(), defaults: UserDefaults = .standard) -> Forecast? {
+        let recent = load(provider, window, defaults).filter { now.timeIntervalSince($0.at) <= lookback }
         guard recent.count >= 3, let latest = recent.last,
               recent.first!.at.distance(to: latest.at) >= 5 * 60,
               let rate = linearRatePerMinute(recent), rate > 0

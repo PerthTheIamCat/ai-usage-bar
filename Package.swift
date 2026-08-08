@@ -12,6 +12,11 @@ let package = Package(
             name: "AIUsageBar",
             dependencies: ["Sparkle"],
             path: "Sources/AIUsageBar"
+        ),
+        .testTarget(
+            name: "AIUsageBarTests",
+            dependencies: ["AIUsageBar"],
+            path: "Tests/AIUsageBarTests"
         )
     ]
 )

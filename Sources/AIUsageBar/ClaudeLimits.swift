@@ -218,7 +218,9 @@ enum ClaudeLimitsReader {
 
     /// Median rather than mean: one interval with an unusual mix of models, or
     /// usage from a device this Mac cannot see, would drag an average around.
-    private static func median(_ values: [Double]) -> Double? {
+    /// Internal rather than private purely so this pure function is testable
+    /// directly instead of only through the log-reading calibration around it.
+    static func median(_ values: [Double]) -> Double? {
         guard !values.isEmpty else { return nil }
         let sorted = values.sorted()
         let middle = sorted.count / 2
