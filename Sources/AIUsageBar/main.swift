@@ -406,7 +406,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.lastGoodClaudeFetchedAt = lastGoodClaude?.fetchedAt
         viewModel.nextRefreshAt = nextRefreshAt
 
+        recordBurnRateSamples(snap)
         UsageNotifier.shared.check(snap)
+    }
+
+    /// Feeds every currently-known limit reading to the burn-rate tracker so
+    /// its pace estimate stays current — cheap bookkeeping, not a rescan.
+    private func recordBurnRateSamples(_ snap: UsageSnapshot) {
+        if let w = snap.claudeLimits?.fiveHour { BurnRateTracker.record(.claude, .fiveHour, usedPercent: w.usedPercent) }
+        if let w = snap.claudeLimits?.sevenDay { BurnRateTracker.record(.claude, .weekly, usedPercent: w.usedPercent) }
+        if let w = snap.codexLimits?.primary { BurnRateTracker.record(.codex, .fiveHour, usedPercent: w.usedPercent) }
+        if let w = snap.codexLimits?.secondary { BurnRateTracker.record(.codex, .weekly, usedPercent: w.usedPercent) }
+        if let w = snap.antigravity?.fiveHour { BurnRateTracker.record(.antigravity, .fiveHour, usedPercent: w.usedPercent) }
+        if let w = snap.antigravity?.weekly { BurnRateTracker.record(.antigravity, .weekly, usedPercent: w.usedPercent) }
     }
 
     // MARK: - Status bar title

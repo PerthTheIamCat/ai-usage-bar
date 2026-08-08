@@ -2,6 +2,22 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.10.3] - 2026-08-08
+
+### Added
+
+- **Depletion warnings.** Every comparable usage tracker in this space
+  converges on the same feature independently, so it earned a spot here too:
+  the 5-hour window's recent readings are fit to a straight line, and when
+  the current pace projects hitting 100% before the window resets, the
+  popover swaps the reset caption for "hits the limit around HH:MM" and a
+  notification fires once per window instance (separate from the existing
+  low-remaining alert, and never on an estimated Claude reading — an
+  estimate that overshot would raise a warning the next real reading then
+  contradicted). Pace is fit from the last 45 minutes of whatever readings
+  the app already displays, kept on disk so a relaunch doesn't lose it, and
+  reset automatically when a window rolls over.
+
 ## [0.10.2] - 2026-08-08
 
 ### Changed

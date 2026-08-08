@@ -165,6 +165,13 @@ struct PaneHeader: View {
 struct LimitRow: View {
     let name: String
     let window: LimitWindow
+    var provider: ProviderKind?
+    var windowKind: LimitWindowKind?
+
+    private var forecast: BurnRateTracker.Forecast? {
+        guard let provider, let windowKind else { return nil }
+        return BurnRateTracker.forecast(provider, windowKind, resetsAt: window.resetsAt)
+    }
 
     var body: some View {
         let remaining = window.remainingPercent
@@ -178,10 +185,18 @@ struct LimitRow: View {
             }
             LimitBarRepresentable(remainingPercent: remaining)
                 .frame(height: 5)
-            // The Claude Desktop snapshot carries percentages but no reset
-            // time, so this caption used to read "resets in —" forever. Say
-            // something useful or say nothing.
-            if let reset = window.resetsAt {
+            // At the current pace this window will hit 100% before it resets
+            // — the single most-requested thing across every comparable
+            // tool. Takes priority over the plain reset caption because it's
+            // the more actionable fact when it applies.
+            if let forecast = forecast?.willDepleteBeforeReset == true ? forecast : nil {
+                Text("⚠︎ at this pace, hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened)) — before it resets")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.orange)
+            } else if let reset = window.resetsAt {
+                // The Claude Desktop snapshot carries percentages but no
+                // reset time, so this caption used to read "resets in —"
+                // forever. Say something useful or say nothing.
                 Text("resets in \(humanReset(reset))")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
@@ -198,11 +213,11 @@ struct LimitRow: View {
 /// A limit window row, or a "window reset" note in its place once the
 /// stored percentage has rolled past its reset time and is meaningless.
 @ViewBuilder
-func limitRowOrNote(_ name: String, _ w: LimitWindow) -> some View {
+func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil) -> some View {
     if let r = w.resetsAt, r <= Date() {
         NoteText(text: "\(name): window reset — use Claude Code or the Desktop app for a fresh reading")
     } else {
-        LimitRow(name: name, window: w)
+        LimitRow(name: name, window: w, provider: provider, windowKind: windowKind)
     }
 }
 
@@ -291,10 +306,17 @@ private struct ProviderSummaryCard: View {
     let todayLine: String?
     let onTap: () -> Void
 
-    private var tightestReset: Date? {
-        [fiveHour, weekly].compactMap { $0 }
-            .min { $0.remainingPercent < $1.remainingPercent }?
-            .resetsAt
+    private var tightest: LimitWindow? {
+        [fiveHour, weekly].compactMap { $0 }.min { $0.remainingPercent < $1.remainingPercent }
+    }
+
+    /// Only the 5-hour window is checked — it's the one that moves fast
+    /// enough for "will I run out before it resets" to be worth asking. The
+    /// weekly window drifts too slowly for a 45-minute pace window to say
+    /// anything useful about it.
+    private var fiveHourForecast: BurnRateTracker.Forecast? {
+        guard let w = fiveHour else { return nil }
+        return BurnRateTracker.forecast(kind, .fiveHour, resetsAt: w.resetsAt)
     }
 
     var body: some View {
@@ -322,7 +344,11 @@ private struct ProviderSummaryCard: View {
                         if let w = fiveHour { MiniLimitRow(label: "5-hour", window: w) }
                         if let w = weekly { MiniLimitRow(label: "Weekly", window: w) }
                     }
-                    if let reset = tightestReset {
+                    if let forecast = fiveHourForecast, forecast.willDepleteBeforeReset {
+                        Text("⚠︎ 5-hour hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened))")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.orange)
+                    } else if let reset = tightest?.resetsAt {
                         Text("resets in \(humanReset(reset))")
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
@@ -599,8 +625,8 @@ struct ClaudePane: View {
         if let l = snap.claudeLimits {
             switch l.state {
             case .ok:
-                if settings.isLimitWindowShown(.fiveHour, for: .claude), let w = l.fiveHour { limitRowOrNote("5-hour", w) }
-                if settings.isLimitWindowShown(.weekly, for: .claude), let w = l.sevenDay { limitRowOrNote("Weekly", w) }
+                if settings.isLimitWindowShown(.fiveHour, for: .claude), let w = l.fiveHour { limitRowOrNote("5-hour", w, provider: .claude, windowKind: .fiveHour) }
+                if settings.isLimitWindowShown(.weekly, for: .claude), let w = l.sevenDay { limitRowOrNote("Weekly", w, provider: .claude, windowKind: .weekly) }
                 if !settings.isLimitWindowShown(.fiveHour, for: .claude)
                     && !settings.isLimitWindowShown(.weekly, for: .claude) {
                     NoteText(text: "Both windows hidden — enable in Settings › Providers")
@@ -669,8 +695,8 @@ struct CodexPane: View {
         if let l = snap.codexLimits {
             CaptionText(title: "Limits · as of \(humanAgo(l.asOf))")
             let settings = AppSettings.shared
-            if settings.isLimitWindowShown(.fiveHour, for: .codex), let w = l.primary { limitRowOrNote("5-hour", w) }
-            if settings.isLimitWindowShown(.weekly, for: .codex), let w = l.secondary { limitRowOrNote("Weekly", w) }
+            if settings.isLimitWindowShown(.fiveHour, for: .codex), let w = l.primary { limitRowOrNote("5-hour", w, provider: .codex, windowKind: .fiveHour) }
+            if settings.isLimitWindowShown(.weekly, for: .codex), let w = l.secondary { limitRowOrNote("Weekly", w, provider: .codex, windowKind: .weekly) }
         } else {
             NoteText(text: "No limit data yet — run codex once")
         }
@@ -719,8 +745,8 @@ struct AntigravityPane: View {
         if fiveHour == nil && weekly == nil {
             NoteText(text: "No quota data yet — use Antigravity once to refresh it")
         } else {
-            if let w = fiveHour { limitRowOrNote("5-hour", w) }
-            if let w = weekly { limitRowOrNote("Weekly", w) }
+            if let w = fiveHour { limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour) }
+            if let w = weekly { limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly) }
         }
     }
 }

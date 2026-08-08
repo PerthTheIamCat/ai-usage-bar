@@ -54,6 +54,9 @@ final class UsageNotifier {
         checkWindow(key: "codex-week", name: "Codex weekly window", window: snap.codexLimits?.secondary, warnBelow: warnBelow)
         checkWindow(key: "antigravity-5h", name: "Antigravity 5-hour window", window: snap.antigravity?.fiveHour, warnBelow: warnBelow)
         checkWindow(key: "antigravity-week", name: "Antigravity weekly window", window: snap.antigravity?.weekly, warnBelow: warnBelow)
+        checkDepletion(key: "deplete-claude-5h", name: "Claude 5-hour window", provider: .claude, window: snap.claudeLimits?.fiveHour)
+        checkDepletion(key: "deplete-codex-5h", name: "Codex 5-hour window", provider: .codex, window: snap.codexLimits?.primary)
+        checkDepletion(key: "deplete-antigravity-5h", name: "Antigravity 5-hour window", provider: .antigravity, window: snap.antigravity?.fiveHour)
         checkLargeSession(provider: "Claude", sessions: snap.claude?.sessions ?? [])
         checkLargeSession(provider: "Codex", sessions: snap.codex?.sessions ?? [])
         checkBudget(snap)
@@ -94,6 +97,30 @@ final class UsageNotifier {
         } else if !low {
             firedKeys.remove(key)
         }
+    }
+
+    /// Separate from `checkWindow`: that one fires once a window is already
+    /// low, this fires earlier — as soon as the current pace projects
+    /// hitting the limit before the reset — which is the point where
+    /// slowing down still helps. Never fires on an estimated reading, same
+    /// reasoning as above: an estimate that overshoots would raise a warning
+    /// the next real reading then contradicts.
+    private func checkDepletion(key: String, name: String, provider: ProviderKind, window: LimitWindow?) {
+        guard let window, !window.isEstimated, let resetsAt = window.resetsAt, resetsAt > Date() else {
+            firedKeys.remove(key)
+            return
+        }
+        guard let forecast = BurnRateTracker.forecast(provider, .fiveHour, resetsAt: resetsAt),
+              forecast.willDepleteBeforeReset
+        else {
+            firedKeys.remove(key)
+            return
+        }
+        guard !firedKeys.contains(key) else { return }
+        firedKeys.insert(key)
+        let eta = forecast.etaToFull.formatted(date: .omitted, time: .shortened)
+        notify(id: key, title: "\(name) on pace to run out",
+               body: "At the current rate, ~\(Int(window.remainingPercent.rounded()))% left runs out around \(eta) — resets in \(humanReset(resetsAt))")
     }
 
     private func checkBudget(_ snap: UsageSnapshot) {
