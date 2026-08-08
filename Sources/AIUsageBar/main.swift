@@ -106,13 +106,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(limitsWatch, forMode: .common)
         limitsWatchTimer = limitsWatch
 
-        let animation = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
-            guard let self, self.lastSnapshot?.antigravity?.isWorking == true else { return }
-            self.animationPhase += 0.08
-            self.updateStatusBarTitle(self.lastSnapshot!)
-        }
-        RunLoop.main.add(animation, forMode: .common)
-        animationTimer = animation
+        // No timer is created here — see updateAntigravityAnimation. Antigravity
+        // is only "working" for a small fraction of the time this app runs; a
+        // Timer that always exists and no-ops when idle still wakes the run
+        // loop at 12.5 Hz forever, which is real (if small) idle cost added
+        // up over a full day for a feature most users see rarely.
 
         NotificationCenter.default.addObserver(
             forName: .usageSettingsChanged, object: nil, queue: .main
@@ -407,7 +405,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.nextRefreshAt = nextRefreshAt
 
         recordBurnRateSamples(snap)
+        updateAntigravityAnimation(isWorking: snap.antigravity?.isWorking == true)
         UsageNotifier.shared.check(snap)
+    }
+
+    /// Starts or stops the icon-spin timer to match Antigravity's actual
+    /// working state, instead of a timer that always runs and no-ops when
+    /// idle. Only acts on an actual transition, so this is a cheap no-op on
+    /// every refresh where the state hasn't changed.
+    private func updateAntigravityAnimation(isWorking: Bool) {
+        guard isWorking != (animationTimer != nil) else { return }
+        if isWorking {
+            let t = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                self.animationPhase += 0.08
+                if let snap = self.lastSnapshot { self.updateStatusBarTitle(snap) }
+            }
+            RunLoop.main.add(t, forMode: .common)
+            animationTimer = t
+        } else {
+            animationTimer?.invalidate()
+            animationTimer = nil
+            animationPhase = 0
+        }
     }
 
     /// Feeds every currently-known limit reading to the burn-rate tracker so

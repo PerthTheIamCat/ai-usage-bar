@@ -70,25 +70,39 @@ struct CaptionText: View {
 struct PanelSurface: ViewModifier {
     var cornerRadius: CGFloat = 10
     var opacity: Double = 0.07
+    /// Real press-down glass response for panels that are actually buttons
+    /// (the provider cards, the switch-provider banner) — the static hero
+    /// card isn't tappable and stays non-interactive.
+    var isInteractive: Bool = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
-        content.background(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(reduceTransparency
-                      ? Color(nsColor: .controlBackgroundColor)
-                      : Color.primary.opacity(opacity))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(reduceTransparency ? 0 : 0.08), lineWidth: 0.5)
-                )
-        )
+        if #available(macOS 26.0, *) {
+            // Real Liquid Glass material — lensing/refraction against
+            // whatever is behind the popover, not a flat opacity guess at
+            // one. It already adapts to Reduce Transparency, Increase
+            // Contrast, and Reduce Motion on its own; overriding that here
+            // would fight the system setting instead of honoring it.
+            let glass: Glass = isInteractive ? .regular.interactive() : .regular
+            content.glassEffect(glass, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            content.background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(reduceTransparency
+                          ? Color(nsColor: .controlBackgroundColor)
+                          : Color.primary.opacity(opacity))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(reduceTransparency ? 0 : 0.08), lineWidth: 0.5)
+                    )
+            )
+        }
     }
 }
 
 extension View {
-    func panelSurface(cornerRadius: CGFloat = 10, opacity: Double = 0.07) -> some View {
-        modifier(PanelSurface(cornerRadius: cornerRadius, opacity: opacity))
+    func panelSurface(cornerRadius: CGFloat = 10, opacity: Double = 0.07, interactive: Bool = false) -> some View {
+        modifier(PanelSurface(cornerRadius: cornerRadius, opacity: opacity, isInteractive: interactive))
     }
 }
 
@@ -363,7 +377,7 @@ private struct ProviderSummaryCard: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .panelSurface(cornerRadius: 10)
+            .panelSurface(cornerRadius: 10, interactive: true)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -442,7 +456,7 @@ private struct SwitchSuggestionBanner: View {
             .foregroundStyle(Color.accentColor)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .panelSurface(cornerRadius: 10, opacity: 0.12)
+            .panelSurface(cornerRadius: 10, opacity: 0.12, interactive: true)
         }
         .buttonStyle(.plain)
     }
