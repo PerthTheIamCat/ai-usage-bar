@@ -177,20 +177,6 @@ enum UsageReader {
         filesModified(under: root, ext: ext, sinceDaysAgo: 1)
     }
 
-    /// Claude tokens recorded in `(from, to]`. Used to project a limit
-    /// percentage forward between the Desktop app's occasional samples: the
-    /// weighting Anthropic applies is not public, so the caller calibrates a
-    /// percent-per-token rate from the user's own consecutive samples rather
-    /// than assuming one.
-    static func claudeTokens(from: Date, to: Date) -> Int {
-        guard from < to else { return 0 }
-        var total = 0
-        for event in claudeTokenEvents() where event.date > from && event.date <= to {
-            total += event.tokens
-        }
-        return total
-    }
-
     /// Today's Claude token usage as timestamped events, from a single pass
     /// over the logs and cached until those files change. The projection
     /// calibrates across many intervals, and re-scanning the logs once per

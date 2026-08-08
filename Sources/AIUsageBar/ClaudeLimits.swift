@@ -186,21 +186,35 @@ enum ClaudeLimitsReader {
         // Token history only reaches back as far as the logs still on disk for
         // today. An interval that starts before that would have its tokens
         // undercounted and would fit an inflated rate, so leave it out.
-        guard let coverageStart = UsageReader.claudeTokenEvents().first?.date else { return nil }
+        //
+        // One scan for the whole calibration, not one per interval: the
+        // underlying files cannot change mid-calculation, so calling
+        // `UsageReader.claudeTokens(from:to:)` here in a loop — as this used
+        // to — paid for a full directory walk and fingerprint check on every
+        // iteration (up to ~17 times per call) to re-derive the exact same
+        // event list `claudeTokenEvents()`'s own cache already had, since the
+        // cache only skips re-parsing, not the walk that checks whether it's
+        // still valid.
+        let events = UsageReader.claudeTokenEvents()
+        guard let coverageStart = events.first?.date else { return nil }
+        func tokens(from: Date, to: Date) -> Int {
+            guard from < to else { return 0 }
+            return events.reduce(0) { $0 + ($1.date > from && $1.date <= to ? $1.tokens : 0) }
+        }
 
         var rates: [Double] = []
         var deltas: [Double] = []
         for (previous, current) in zip(samples, samples.dropFirst()) {
             let percentDelta = current.fiveHourUsed - previous.fiveHourUsed
             guard percentDelta > 0, previous.at < current.at, previous.at >= coverageStart else { continue }
-            let tokens = UsageReader.claudeTokens(from: previous.at, to: current.at)
-            guard tokens > 0 else { continue }
-            rates.append(percentDelta / Double(tokens))
+            let tokensUsed = tokens(from: previous.at, to: current.at)
+            guard tokensUsed > 0 else { continue }
+            rates.append(percentDelta / Double(tokensUsed))
             deltas.append(percentDelta)
         }
         guard let ratePerToken = median(rates), let typicalDelta = median(deltas) else { return nil }
 
-        let sinceTokens = UsageReader.claudeTokens(from: stored.observedAt, to: Date())
+        let sinceTokens = tokens(from: stored.observedAt, to: Date())
         guard sinceTokens > 0 else { return nil }
 
         // Never project further than a typical interval's movement past the
