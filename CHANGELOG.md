@@ -2,6 +2,85 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.11.0] - 2026-08-09
+
+### Changed
+
+- **Battery.** macOS was reporting AI Usage Bar under "Using Significant
+  Energy", and it was right: the shipping build burned 33 minutes of CPU in
+  26 hours of running — about 2% of a core, continuously, to display two
+  percentages. This release is a rewrite of how the local logs are read, and
+  the measurements are at the end of this section. What was responsible:
+  - `codexLimits()` read every byte of the newest Codex session log on every
+    60-second tick to find one rate-limit reading near its end. On this
+    machine that file is 116 MB — about 83 GB read and JSON-scanned per 12
+    hours. It now reads a 2 MB tail (falling back to a full scan only if that
+    comes up empty) and caches the result against the file's mtime, so a tick
+    where Codex hasn't written costs nothing at all.
+  - Every log line was materialised three times: the whole file as a `String`,
+    then a `String` per line, then a re-encoded `Data` per line for
+    `JSONSerialization`. Lines are now split at the byte level out of the
+    memory-mapped file and handed straight to the parser, and the marker
+    filter (`"usage"`, `"token_count"`, …) runs on raw bytes via
+    `memchr`/`memcmp` — so a line that can't match costs no allocation.
+  - A refresh with nothing new to read now does no reading. A stat-only
+    signature of every source file is compared first; on an idle Mac the tick
+    is a few dozen `stat` calls instead of a full rescan.
+  - The 30-day history scan ran twice per pass (`periodCosts()` and
+    `dailyTrend()` each did their own), re-reading ~470 MB of logs for
+    identical numbers. It runs once and is cached against the same
+    stat-only signature.
+- Smaller repeats of the same shape: today's Claude logs were parsed twice per
+  refresh (the hourly timeline redid the token scan that was already cached),
+  Antigravity's quota cache was read and parsed twice per refresh (once per
+  window), and Antigravity's "is working" check ran four Unicode-correct
+  substring searches over an entire log file rather than its tail.
+- Periodic timers now declare a tolerance, letting macOS coalesce their
+  wake-ups with others instead of waking the CPU on their own schedule.
+- **Logs are now parsed once, not once per refresh.** Both CLIs only ever
+  append to a session log, so a refresh that finds a file 40 KB longer has
+  40 KB of new work — not the 34 MB (Claude) or 116 MB (Codex) the file has
+  grown to. Each file's parsed records are kept and extended in place, which
+  is what makes an *active* coding session cheap; the previous
+  fingerprint-keyed caches invalidated the moment a log was appended to, i.e.
+  exactly when they were needed. Today's totals, the session rows, the hourly
+  timeline, the burn-rate token events and the 30-day trend all read from
+  those records instead of walking the same files one to four more times
+  each.
+- Timestamps are parsed directly rather than through `ISO8601DateFormatter`,
+  and read out of a line's raw bytes rather than by parsing the JSON around
+  them — both were being paid once per log line. `Calendar.current` (which
+  rebuilds itself from user preferences on every access) is no longer touched
+  per line either.
+- The menu-bar title is only redrawn when it would actually look different,
+  instead of re-rendering its meter images every minute.
+
+Measured on the same Mac, over a run with an active Claude Code session
+writing to its log throughout: sustained CPU went from **2.12%** (33m26s of
+CPU across 26h of running, in 0.10.6) to **0.073%**, and resident memory
+settled at 29 MB instead of 45 MB. Verified against the previous
+implementation on the real ~1.1 GB of local logs: identical output, and
+identical 30-day trend across 20 recorded days apart from floating-point
+summation order (largest difference 2e-13 USD).
+
+### Fixed
+
+- Usage silently read as empty after midnight. The UTC date prefixes used to
+  pick out "today" in the logs were computed once at launch and never again,
+  so an app left running across midnight kept filtering against the previous
+  day until it was relaunched.
+- The five-second watcher that picks up a fresh Claude limits reading had
+  quietly stopped working. `URL` caches file metadata on the instance, and the
+  two paths it polls are `static let`s — so every poll compared the mtime they
+  had at launch against itself, never saw a change, and never fired. New
+  readings only arrived on the next full refresh, up to a minute later.
+- The five-hour projection was calibrated against inflated token counts.
+  Claude Code writes the same assistant record two or three times per turn
+  (60 of 113 requests in a sample day), and while today's displayed total
+  correctly collapsed those duplicates, the token stream feeding the
+  projection did not — it saw 33.7M tokens where the app showed 19.9M. Both
+  now come from the same de-duplicated records.
+
 ## [0.10.6] - 2026-08-08
 
 ### Added
