@@ -197,6 +197,9 @@ final class RefreshCountdownView: NSView {
             self?.updateLabel()
             self?.needsDisplay = true
         }
+        // The label only ever shows whole seconds, so half a second of slack
+        // costs nothing visible and lets these ticks coalesce.
+        t.tolerance = 0.2
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }

@@ -21,7 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// rewrite by the bridge or the Desktop app is noticed within seconds.
     private var claudeSourceStamps: [String: Date] = [:]
     private var hasPrimedClaudeSources = false
+    private var claudeLimitsFetchInFlight = false
     private var animationPhase: CGFloat = 0
+    /// What the menu-bar title currently shows, so an unchanged refresh does
+    /// not redraw it.
+    private var lastStatusBarSignature: String?
     // Last successful Claude limits, reused while the local statusLine
     // snapshot is stale or unavailable. Persisted to UserDefaults so a
     // relaunch still has a useful last-known reading.
@@ -47,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // a time, and its progress is shown in the same loading indicator.
     private var periodStatsInFlight = false
     private var activePeriodStatsID: UUID?
+    /// Stat-only signature of the logs the last full scan read, so a tick
+    /// where nothing was written skips the scan entirely.
+    private var lastSourcesFingerprint: String?
 
     private static let appVersion: String = {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -91,6 +98,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let t = Timer(timeInterval: refreshInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        // Tolerance lets macOS coalesce this wake-up with others already
+        // scheduled instead of waking the CPU on its own for us. Nothing here
+        // needs to land on an exact second, and a lone periodic wake-up is
+        // one of the costlier things a background app can do to a battery.
+        t.tolerance = refreshInterval * 0.2
         RunLoop.main.add(t, forMode: .common)
         timer = t
 
@@ -103,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let limitsWatch = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
             self?.refreshClaudeLimitsIfSourceChanged()
         }
+        limitsWatch.tolerance = 2
         RunLoop.main.add(limitsWatch, forMode: .common)
         limitsWatchTimer = limitsWatch
 
@@ -234,7 +247,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setLoadingStatus("Starting…")
         maybeRefreshExchangeRate()
         nextRefreshAt = Date().addingTimeInterval(refreshInterval)
+        let previousSourcesFingerprint = lastSourcesFingerprint
         DispatchQueue.global(qos: .utility).async {
+            // Most minutes nothing has written to any log we read — the Mac is
+            // idle, or the user isn't using a CLI right now. Comparing a
+            // stat-only signature first turns those ticks into a few dozen
+            // `stat` calls instead of re-reading and re-parsing every log, and
+            // that idle cost is what the app pays for the overwhelming
+            // majority of the hours it is running.
+            let sourcesFingerprint = UsageReader.todaySourcesFingerprint()
+            if let previous = previousSourcesFingerprint, previous == sourcesFingerprint {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.activeRefreshID == refreshID else { return }
+                    self.activeRefreshID = nil
+                    self.viewModel.loadingMessage = nil
+                    // Re-apply the unchanged snapshot so anything time-based
+                    // (reset countdowns, staleness, burn-rate samples) still
+                    // moves on the usual cadence.
+                    if let snap = self.lastSnapshot { self.apply(snap) }
+                    if shouldStartPeriodStats {
+                        self.startPeriodStatsRefresh(logAsStartup: false)
+                    }
+                }
+                return
+            }
             let snap = UsageReader.snapshot(includePeriodStats: false) { message in
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.activeRefreshID == refreshID else { return }
@@ -248,6 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 snap.periodCosts = self.lastGoodPeriodCosts
                 snap.dailyTrend = self.lastGoodDailyTrend
                 self.apply(snap)
+                self.lastSourcesFingerprint = sourcesFingerprint
                 self.activeRefreshID = nil
                 let elapsed = String(format: "%.1fs", Date().timeIntervalSince(startedAt))
                 if isInitialLoad || Date().timeIntervalSince(startedAt) > 2 {
@@ -271,12 +308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setLoadingStatus("Calculating 7/30-day costs…")
 
         DispatchQueue.global(qos: .utility).async {
-            let periodCosts = UsageReader.periodCosts()
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.activePeriodStatsID == statsID else { return }
-                self.setLoadingStatus("Calculating 30-day trend…")
-            }
+            // One 30-day scan, not two: the period costs are summed from the
+            // same daily buckets the trend is built from, so computing them
+            // separately meant reading every log of the last month twice.
             let trend = UsageReader.dailyTrend(days: 30)
+            let periodCosts = UsageReader.periodCosts(from: trend)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.activePeriodStatsID == statsID else { return }
                 self.lastGoodPeriodCosts = periodCosts
@@ -348,11 +384,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// seconds costs nothing next to the log scan a full refresh runs, and it
     /// avoids the atomic-replace races a file-descriptor watch would hit.
     private func refreshClaudeLimitsIfSourceChanged() {
-        guard var snap = lastSnapshot, snap.claudeLimits != nil else { return }
+        guard let snap = lastSnapshot, snap.claudeLimits != nil else { return }
         let sources = [ClaudeLimitsReader.statusLineSnapshotURL, ClaudeLimitsReader.desktopPlanUsageURL]
         var changed = false
         for url in sources {
-            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            // `URL` caches resource values on the instance and both of these
+            // are `static let`s, so asking them directly returned whatever
+            // mtime they had when the app started — every poll compared that
+            // frozen value against itself, `changed` was never true, and this
+            // watcher had quietly stopped doing anything at all. Ask through a
+            // fresh URL so the poll sees the file as it is now.
+            let fresh = URL(fileURLWithPath: url.path)
+            let modified = (try? fresh.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             if claudeSourceStamps[url.path] != modified {
                 claudeSourceStamps[url.path] = modified
                 changed = true
@@ -365,9 +408,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hasPrimedClaudeSources = true
             return
         }
-        guard changed else { return }
-        snap.claudeLimits = ClaudeLimitsReader.fetch()
-        apply(snap)
+        guard changed, !claudeLimitsFetchInFlight else { return }
+        // `fetch()` projects the five-hour window forward from today's logged
+        // tokens, so it can reach the log reader — and the reader serialises
+        // on its parse cache, which a background refresh may be holding while
+        // it works through a month of history. Doing that here would block the
+        // main thread and freeze the menu bar, so this hops off it like every
+        // other read in the app.
+        claudeLimitsFetchInFlight = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let limits = ClaudeLimitsReader.fetch()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.claudeLimitsFetchInFlight = false
+                // Re-read rather than reusing the captured copy: a full
+                // refresh may have landed while this was in flight.
+                guard var latest = self.lastSnapshot else { return }
+                latest.claudeLimits = limits
+                self.apply(latest)
+            }
+        }
     }
 
     private func apply(_ snap: UsageSnapshot) {
@@ -525,6 +585,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let budget = budgetPart(snap) { parts.append(budget) }
         guard let button = statusItem.button else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
+
+        // Drawing this title renders a fresh meter image per segment and makes
+        // the menu bar re-layout. Most refreshes produce exactly the title
+        // that is already up there — during a quiet hour, every single one —
+        // so compare first and leave the existing title alone when nothing a
+        // viewer could see has changed.
+        let signature = parts.map { part in
+            let meter = part.remainingPercent.map { String(format: "%.1f", $0) } ?? "-"
+            return "\(part.text)|\(meter)|\(part.warning)|\(part.style?.rawValue ?? "-")"
+        }.joined(separator: "#") + "@\(font.pointSize)"
+        // The Antigravity icon spins while it works, so during that the title
+        // genuinely differs every frame and must not be skipped.
+            + (animationTimer == nil ? "" : "~\(animationPhase)")
+        guard signature != lastStatusBarSignature else { return }
+        lastStatusBarSignature = signature
         // Menu bar space is scarce — on a notched Mac with a busy bar, macOS
         // silently parks an item off-screen rather than shrinking it, and the
         // app looks like it never launched. Keep this title as narrow as the
