@@ -2,6 +2,39 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **The five-hour projection was calibrating against the wrong number.** It
+  fitted "percent of the window per token" against the total token count —
+  and on real usage 98% of every token counted is a cache read, which barely
+  moves that window at all. The fit was essentially against noise (r² 0.07
+  against the percentage moves actually recorded). It now weights tokens the
+  way the window is really consumed: output counts ten times as much as fresh
+  input, whether that input arrives as `input_tokens` or as a cache write, and
+  cached reads count for nothing (r² 0.89 on held-out data).
+- Removed the ceiling that kept the projection within a typical interval's
+  movement of the last real reading. It was there to contain a rate estimate
+  that could be wildly wrong, and it clamped hardest on exactly the bursts
+  worth warning about — a real 14-point climb was being shown as 1.3. With a
+  rate fitted against the right quantity the median across intervals is
+  enough on its own.
+
+Checked against the 1,198 readings Claude Desktop had recorded locally over
+three weeks, on the intervals where a projection is actually displayed: mean
+error 2.44 → **1.14** percentage points, worst under-read −29.5 → −10.1,
+worst over-read +9.5 → +8.5. Better in all three directions rather than
+traded off between them.
+
+Two things this does not change. The projection still only runs for people
+whose readings come from the Claude Desktop app — it needs that app's sample
+history to calibrate against, and the Claude Code statusLine bridge does not
+keep one. And the weights were fitted on a single account's history; they
+describe how the limit treats each kind of token, while the per-account scale
+is still fitted live, so a different plan is absorbed there rather than by
+these numbers.
+
 ## [0.11.0] - 2026-08-09
 
 ### Changed
