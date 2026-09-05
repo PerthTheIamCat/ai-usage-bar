@@ -529,7 +529,7 @@ final class AppSettings: ObservableObject {
     private init() {
         Self.migrateLegacyDomainIfNeeded()
         let d = UserDefaults.standard
-        displayMode = UsageDisplayMode(rawValue: d.string(forKey: Keys.displayMode) ?? "") ?? .remaining
+        displayMode = UsageDisplayMode(rawValue: d.string(forKey: Keys.displayMode) ?? "") ?? .used
         let stored = d.double(forKey: Keys.warnBelowRemaining)
         warnBelowRemaining = stored > 0 ? stored : 20
         let legacyShowFiveHour = d.object(forKey: Keys.showFiveHourInMenuBar) as? Bool ?? true

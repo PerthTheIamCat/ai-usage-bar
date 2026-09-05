@@ -44,6 +44,28 @@ private struct GeneralTab: View {
             })
     }
 
+    private var allProvidersWindowSelection: Binding<MenuBarWindowSelection> {
+        Binding(
+            get: {
+                let selections = ProviderKind.allCases.map { MenuBarWindowSelection.selection(for: $0, in: settings) }
+                guard let first = selections.first, selections.dropFirst().allSatisfy({ $0 == first }) else {
+                    return .both
+                }
+                return first
+            },
+            set: { selection in
+                for kind in ProviderKind.allCases {
+                    settings.setLimitWindowShown(.fiveHour, for: kind,
+                                                  selection == .fiveHour || selection == .both)
+                    settings.setLimitWindowShown(.weekly, for: kind,
+                                                  selection == .weekly || selection == .both)
+                }
+                // Keep the legacy Claude-only values in sync for older saved preferences.
+                settings.showFiveHourInMenuBar = selection == .fiveHour || selection == .both
+                settings.showWeeklyInMenuBar = selection == .weekly || selection == .both
+            })
+    }
+
     var body: some View {
         Form {
             Section {
@@ -52,16 +74,41 @@ private struct GeneralTab: View {
                     Text("Used — “16% used”").tag(UsageDisplayMode.used)
                 }
                 .pickerStyle(.segmented)
-                Picker("Menu bar style", selection: allProvidersStyleBinding) {
+                Text("Menu bar style")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8)
+                ], spacing: 8) {
                     ForEach(LimitStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
+                        MenuBarStyleOption(
+                            style: style,
+                            selected: allProvidersStyleBinding.wrappedValue == style,
+                            mode: settings.displayMode,
+                            warnBelow: settings.warnBelowRemaining,
+                            action: { allProvidersStyleBinding.wrappedValue = style }
+                        )
                     }
                 }
-                .pickerStyle(.menu)
+
+                Text("Rows to show")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+                Picker("Rows to show", selection: allProvidersWindowSelection) {
+                    ForEach(MenuBarWindowSelection.allCases) { selection in
+                        Text(selection.title).tag(selection)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .help("Choose whether the menu bar shows the 5-hour row, weekly row, both, or neither.")
             } header: {
                 Text("Usage display")
             } footer: {
-                Text("Applies to every provider. Choose a different style for an individual provider in Settings › Providers. The popover always shows the full bar meter.")
+                Text("Applies to every provider. A single row grows to use the available menu-bar height. The popover always shows the full bar meter.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -156,13 +203,119 @@ private struct GeneralTab: View {
     }
 }
 
+private enum MenuBarWindowSelection: String, CaseIterable, Identifiable {
+    case fiveHour
+    case weekly
+    case both
+    case none
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fiveHour: return "5h"
+        case .weekly: return "W"
+        case .both: return "Both"
+        case .none: return "None"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .fiveHour: return "5-hour row only"
+        case .weekly: return "Weekly row only"
+        case .both: return "5-hour and weekly rows"
+        case .none: return "Hide limit rows"
+        }
+    }
+
+    static func selection(for kind: ProviderKind, in settings: AppSettings) -> Self {
+        let fiveHour = settings.isLimitWindowShown(.fiveHour, for: kind)
+        let weekly = settings.isLimitWindowShown(.weekly, for: kind)
+        switch (fiveHour, weekly) {
+        case (true, true): return .both
+        case (true, false): return .fiveHour
+        case (false, true): return .weekly
+        case (false, false): return .none
+        }
+    }
+}
+
+private struct MenuBarStyleOption: View {
+    let style: LimitStyle
+    let selected: Bool
+    let mode: UsageDisplayMode
+    let warnBelow: Double
+    let action: () -> Void
+
+    private var subtitle: String {
+        switch style {
+        case .bar: return "Two rows of meters"
+        case .ring: return "Two concentric rings"
+        case .percentOnly: return "Numbers only"
+        case .barAndPercent: return "Meters + values"
+        case .ringAndPercent: return "Rings + values"
+        case .dotAndPercent: return "Dots + values"
+        }
+    }
+
+    private var preview: NSImage {
+        MiniMeter.image(
+            windows: [
+                MenuBarWindow(kind: .fiveHour, remainingPercent: 58),
+                MenuBarWindow(kind: .weekly, remainingPercent: 82)
+            ],
+            style: style,
+            mode: mode,
+            warnBelow: warnBelow
+        )
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .font(.system(size: 14))
+                Image(nsImage: preview)
+                    .interpolation(.high)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 78, height: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(style.displayName)
+                        .font(.system(size: 11, weight: .medium))
+                    Text(subtitle)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(selected ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Menu bar style \(style.displayName)")
+        .accessibilityValue(selected ? "Selected" : "")
+    }
+}
+
 private struct ProvidersTab: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Providers").font(.headline)
-            Text("Drag to reorder providers. Expand a provider to configure its menu-bar style, limit windows, popover visibility, and detail rows independently.")
+            Text("Drag to reorder providers. Expand a provider to configure its menu-bar visibility, popover visibility, and detail rows.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -260,18 +413,6 @@ private struct ProviderConfiguration: View {
     let kind: ProviderKind
     @ObservedObject private var settings = AppSettings.shared
 
-    private var styleBinding: Binding<LimitStyle> {
-        Binding(
-            get: { settings.limitStyle(for: kind) },
-            set: { settings.setLimitStyle($0, for: kind) })
-    }
-
-    private func windowBinding(_ window: LimitWindowKind) -> Binding<Bool> {
-        Binding(
-            get: { settings.isLimitWindowShown(window, for: kind) },
-            set: { settings.setLimitWindowShown(window, for: kind, $0) })
-    }
-
     private func detailBinding(_ detail: ProviderDetailKind) -> Binding<Bool> {
         Binding(
             get: { settings.providerDetails[kind]?.contains(detail) ?? true },
@@ -281,25 +422,6 @@ private struct ProviderConfiguration: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
-            LabeledContent("Menu-bar style") {
-                Picker("Menu-bar style", selection: styleBinding) {
-                    ForEach(LimitStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 150, alignment: .trailing)
-            }
-
-            Text("Limit windows")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            ForEach(kind.supportedLimitWindows) { window in
-                Toggle(window.displayName, isOn: windowBinding(window))
-                    .toggleStyle(.checkbox)
-            }
-
             Text("Popover details")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)

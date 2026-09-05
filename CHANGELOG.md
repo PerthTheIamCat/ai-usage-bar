@@ -2,6 +2,27 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [0.12.0] - 2026-09-05
+
+### Added
+
+- **Dual-window menu-bar meters.** Each provider can show its 5-hour and
+  weekly limits together. Bars stack into two compact rows; rings use clear
+  concentric layers with 5h on the outside and weekly inside.
+- **Native display presets in General settings.** Six radio-style choices now
+  show a live menu-bar preview: Bar, Ring, Percent only, Bar + percent,
+  Ring + percent, and Dot + percent.
+- **Window visibility controls.** Choose 5h, weekly, both, or none from one
+  compact control. A single visible row grows to use the available menu-bar
+  height, while two rows stay compact.
+
+### Changed
+
+- Usage percentages now default to **used**, with the existing preference
+  preserved when already saved.
+- Menu-bar meters use semantic macOS colors, compact labels, and dim missing
+  readings so the display remains legible across light and dark appearances.
+
 ## [0.11.1] - 2026-08-09
 
 ### Fixed

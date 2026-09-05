@@ -90,40 +90,104 @@ final class LimitBarView: NSView {
     }
 }
 
-/// Small inline bar/ring meter embedded in the menu-bar title via
-/// `NSTextAttachment`, vertically centered on `font` like
-/// `BrandIcons.attachment`. Settings › General › Limit style picks bar vs.
-/// ring; percent-only is rendered as plain text by the caller.
+/// A visible window keeps its slot even when its reading is unavailable.
+struct MenuBarWindow {
+    let kind: LimitWindowKind
+    let remainingPercent: Double?
+
+    var label: String { kind == .fiveHour ? "5h" : "W" }
+    var validRemaining: Double? {
+        guard let value = remainingPercent, value.isFinite else { return nil }
+        return max(0, min(100, value))
+    }
+}
+
+/// One compact attachment per provider: stacked bars/text or concentric rings.
+/// Capture values and settings before NSImage's deferred drawing callback.
 enum MiniMeter {
-    static func attachment(remainingPercent: Double, style: LimitStyle, font: NSFont, color: NSColor) -> NSAttributedString {
-        let height = font.pointSize * 0.75
-        let image: NSImage
-        switch style {
-        case .bar, .barAndPercent:
-            let size = NSSize(width: height * 2.4, height: height)
-            image = NSImage(size: size, flipped: false) { rect in
-                drawCapsuleMeter(in: rect, remainingPercent: remainingPercent, color: color)
-                return true
+    static func image(windows: [MenuBarWindow], style: LimitStyle,
+                      mode: UsageDisplayMode, warnBelow: Double) -> NSImage {
+        let height: CGFloat = 20
+        let isSingleRow = windows.count == 1
+        let rowHeight: CGFloat = isSingleRow ? height : 10
+        let barHeight: CGFloat = isSingleRow ? 8 : 6
+        let isRing = style == .ring || style == .ringAndPercent
+        let meterWidth: CGFloat = !style.showsMeter ? 0 : (isRing ? 20 : (style == .dotAndPercent ? (isSingleRow ? 8 : 6) : (isSingleRow ? 34 : 28)))
+        let labelsWidth: CGFloat = (!isRing || style.showsPercent) ? 15 : 0
+        let numberFont = NSFont.monospacedDigitSystemFont(ofSize: isSingleRow ? 10 : 9, weight: .regular)
+        let numberWidth = ceil(("100%" as NSString).size(withAttributes: [.font: numberFont]).width)
+        let textWidth = labelsWidth + (style.showsPercent ? numberWidth + 2 : 0)
+        let gap: CGFloat = meterWidth > 0 && textWidth > 0 ? 4 : 0
+        let size = NSSize(width: meterWidth + gap + textWidth, height: height)
+        return NSImage(size: size, flipped: false) { _ in
+            for (index, window) in windows.enumerated() {
+                let remaining = window.validRemaining
+                let color: NSColor = remaining.map { $0 < warnBelow ? .systemRed : .labelColor } ?? .tertiaryLabelColor
+                let fraction = remaining.map { (mode == .used ? 100 - $0 : $0) / 100 }
+                let y = height - CGFloat(index + 1) * rowHeight
+                // Semantic shades follow macOS appearance and contrast settings.
+                let trackColor: NSColor = remaining == nil ? .quaternaryLabelColor : .tertiaryLabelColor
+                if isRing {
+                    // Outer = 5h, inner = weekly; keep that mapping if a window is hidden.
+                    let diameter: CGFloat = isSingleRow ? 20 : (window.kind == .fiveHour ? 20 : 12)
+                    let rect = NSRect(x: (20 - diameter) / 2, y: (20 - diameter) / 2,
+                                      width: diameter, height: diameter).insetBy(dx: 1.25, dy: 1.25)
+                    let track = NSBezierPath(ovalIn: rect)
+                    track.lineWidth = 2.5
+                    trackColor.setStroke()
+                    track.stroke()
+                    if let fraction, fraction > 0 {
+                        color.setStroke()
+                        if fraction >= 1 {
+                            track.stroke()
+                        } else {
+                            let arc = NSBezierPath()
+                            arc.appendArc(withCenter: NSPoint(x: rect.midX, y: rect.midY),
+                                          radius: rect.width / 2, startAngle: 90,
+                                          endAngle: 90 - CGFloat(fraction) * 360, clockwise: true)
+                            arc.lineWidth = 2.5
+                            arc.lineCapStyle = .round
+                            arc.stroke()
+                        }
+                    }
+                } else if style.showsMeter {
+                    let rect = NSRect(x: 0, y: y + (rowHeight - barHeight) / 2, width: meterWidth, height: barHeight)
+                    trackColor.setFill()
+                    NSBezierPath(roundedRect: rect, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
+                    if let fraction, style == .dotAndPercent || fraction > 0 {
+                        color.setFill()
+                        let fill = NSRect(x: rect.minX, y: rect.minY,
+                                          width: style == .dotAndPercent ? meterWidth : meterWidth * CGFloat(fraction), height: barHeight)
+                        // Clip a rounded full-size fill so very small values stay proportional.
+                        NSGraphicsContext.saveGraphicsState()
+                        NSBezierPath(rect: fill).addClip()
+                        NSBezierPath(roundedRect: rect, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
+                        NSGraphicsContext.restoreGraphicsState()
+                    }
+                }
+                if labelsWidth > 0 {
+                    let x = meterWidth + gap
+                    let textY = y + (rowHeight - 11) / 2
+                    drawText(window.label, in: NSRect(x: x, y: textY, width: 15, height: 11),
+                             font: .systemFont(ofSize: isSingleRow ? 10 : 9, weight: .regular), color: .secondaryLabelColor)
+                    if style.showsPercent {
+                        let text = remaining.map { mode.shortText(remaining: $0) } ?? "—"
+                        drawText(text, in: NSRect(x: x + 17, y: textY, width: numberWidth, height: 11),
+                                 font: numberFont, color: color, alignment: .right)
+                    }
+                }
             }
-        case .ring, .ringAndPercent:
-            let size = NSSize(width: height, height: height)
-            image = NSImage(size: size, flipped: false) { rect in
-                drawRingMeter(in: rect, remainingPercent: remainingPercent, color: color)
-                return true
-            }
-        case .dotAndPercent:
-            let size = NSSize(width: height * 0.75, height: height)
-            image = NSImage(size: size, flipped: false) { rect in
-                drawDotMeter(in: rect, remainingPercent: remainingPercent, color: color)
-                return true
-            }
-        case .percentOnly:
-            let size = NSSize(width: height, height: height)
-            image = NSImage(size: size, flipped: false) { _ in true }
+            return true
         }
+    }
+
+    static func attachment(windows: [MenuBarWindow], style: LimitStyle, font: NSFont,
+                           mode: UsageDisplayMode, warnBelow: Double) -> NSAttributedString {
+        let image = image(windows: windows, style: style, mode: mode, warnBelow: warnBelow)
         let attachment = NSTextAttachment()
         attachment.image = image
-        attachment.bounds = CGRect(x: 0, y: (font.capHeight - image.size.height) / 2, width: image.size.width, height: image.size.height)
+        attachment.bounds = CGRect(x: 0, y: (font.capHeight - image.size.height) / 2,
+                                   width: image.size.width, height: image.size.height)
         return NSAttributedString(attachment: attachment)
     }
 }

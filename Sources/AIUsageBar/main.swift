@@ -519,35 +519,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             attributes: [.font: font, .foregroundColor: NSColor.labelColor])
     }
 
-    /// `remainingPercent` is nil when the segment has no meaningful percent
-    /// to draw a meter from (e.g. unavailable/error states, or a
-    /// token/prompt-count fallback) — those always render as text regardless
-    /// of Limit style.
-    private func statusBarPart(for kind: ProviderKind, _ snap: UsageSnapshot) -> (icon: NSImage, text: String, remainingPercent: Double?, warning: Bool, style: LimitStyle?)? {
-        guard AppSettings.shared.isShownInMenuBar(kind) else { return nil }
-        let warnBelow = AppSettings.shared.warnBelowRemaining
+    private struct StatusBarPart {
+        let icon: NSImage
+        let text: String
+        let windows: [MenuBarWindow]
+        let warning: Bool
+        let style: LimitStyle?
+        let accessibilityText: String
+    }
+
+    private func statusBarPart(for kind: ProviderKind, _ snap: UsageSnapshot) -> StatusBarPart? {
+        let settings = AppSettings.shared
+        guard settings.isShownInMenuBar(kind) else { return nil }
+        var fiveHour: Double?
+        var weekly: Double?
+        var fallback: String
+        var stateDescription = ""
+        var icon = kind.icon
         switch kind {
         case .claude:
-            guard snap.claude != nil else { return nil }
-            let low = lowestClaudeRemaining(snap)
-            return (BrandIcons.claude, claudeTitleValue(snap), low, (low ?? 100) < warnBelow, AppSettings.shared.limitStyle(for: .claude))
-        case .codex:
-            guard let x = snap.codex else { return nil }
-            if let v = codexTitleValue(snap) { return (BrandIcons.codex, v.text, v.remaining, v.remaining < warnBelow, AppSettings.shared.limitStyle(for: .codex)) }
-            return (BrandIcons.codex, formatTokens(x.totalTokens), nil, false, AppSettings.shared.limitStyle(for: .codex))
-        case .antigravity:
-            guard let g = snap.antigravity else { return nil }
-            let settings = AppSettings.shared
-            let windows = [
-                settings.isLimitWindowShown(.fiveHour, for: .antigravity) ? g.fiveHour : nil,
-                settings.isLimitWindowShown(.weekly, for: .antigravity) ? g.weekly : nil,
-            ].compactMap { $0 }
-            let icon = g.isWorking ? BrandIcons.rotated(BrandIcons.gemini, angle: animationPhase) : BrandIcons.gemini
-            if let remaining = windows.map(\.remainingPercent).min() {
-                return (icon, settings.displayMode.shortText(remaining: remaining), remaining, remaining < warnBelow, settings.limitStyle(for: .antigravity))
+            guard let usage = snap.claude else { return nil }
+            fallback = formatTokens(usage.total)
+            if let limits = snap.claudeLimits {
+                switch limits.state {
+                case .ok:
+                    fiveHour = limits.fiveHour?.remainingPercent
+                    weekly = limits.sevenDay?.remainingPercent
+                case .stale: stateDescription = " · stale"
+                case .unavailable: stateDescription = " · unavailable"
+                case .error: stateDescription = " · error"
+                }
             }
-            return (icon, "\(g.totalPrompts)P", nil, false, settings.limitStyle(for: .antigravity))
+        case .codex:
+            guard let usage = snap.codex else { return nil }
+            fallback = formatTokens(usage.totalTokens)
+            if let window = snap.codexLimits?.primary, !isExpired(window) {
+                fiveHour = window.remainingPercent
+            }
+            if let window = snap.codexLimits?.secondary, !isExpired(window) {
+                weekly = window.remainingPercent
+            }
+        case .antigravity:
+            guard let usage = snap.antigravity else { return nil }
+            fallback = "\(usage.totalPrompts)P"
+            fiveHour = usage.fiveHour?.remainingPercent
+            weekly = usage.weekly?.remainingPercent
+            if usage.isWorking { icon = BrandIcons.rotated(BrandIcons.gemini, angle: animationPhase) }
         }
+        let windows = kind.supportedLimitWindows.filter {
+            settings.isLimitWindowShown($0, for: kind)
+        }.map {
+            MenuBarWindow(kind: $0, remainingPercent: $0 == .fiveHour ? fiveHour : weekly)
+        }
+        let details = windows.map { window in
+            let value = window.validRemaining.map { settings.displayMode.rowText(remaining: $0) } ?? "unavailable"
+            return "\(window.kind.displayName): \(value)"
+        }.joined(separator: ", ")
+        return StatusBarPart(icon: icon, text: fallback, windows: windows,
+                             warning: windows.contains { ($0.validRemaining ?? 100) < settings.warnBelowRemaining },
+                             style: settings.limitStyle(for: kind),
+                             accessibilityText: "\(kind.displayName): \(windows.isEmpty ? fallback : details)\(stateDescription)")
     }
 
     /// Combined estimated spend for the user's chosen budget period, nil
@@ -569,7 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Only appears once spend reaches 80% of budget — routine, well-under-
     /// budget usage stays silent rather than adding a permanent segment.
-    private func budgetPart(_ snap: UsageSnapshot) -> (icon: NSImage, text: String, remainingPercent: Double?, warning: Bool, style: LimitStyle?)? {
+    private func budgetPart(_ snap: UsageSnapshot) -> StatusBarPart? {
         guard let spend = currentSpendUSD(snap) else { return nil }
         let budget = AppSettings.shared.budgetAmountUSD
         let fraction = spend / budget
@@ -577,7 +608,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let icon = NSImage(systemSymbolName: "dollarsign.circle.fill", accessibilityDescription: "Budget")
             ?? NSImage(size: NSSize(width: 1, height: 1))
         icon.isTemplate = true
-        return (icon, formatUSD(spend), nil, fraction >= 1.0, nil)
+        return StatusBarPart(icon: icon, text: formatUSD(spend), windows: [], warning: fraction >= 1.0,
+                             style: nil, accessibilityText: "Budget: \(formatUSD(spend))")
     }
 
     private func updateStatusBarTitle(_ snap: UsageSnapshot) {
@@ -591,10 +623,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // that is already up there — during a quiet hour, every single one —
         // so compare first and leave the existing title alone when nothing a
         // viewer could see has changed.
+        let settings = AppSettings.shared
+        let description = (["AI Usage Bar"] + parts.map(\.accessibilityText)).joined(separator: "\n")
+        button.toolTip = description + "\n5h: top bar / outer ring · W: bottom bar / inner ring\nClick to view usage"
+        button.setAccessibilityLabel(description)
         let signature = parts.map { part in
-            let meter = part.remainingPercent.map { String(format: "%.1f", $0) } ?? "-"
-            return "\(part.text)|\(meter)|\(part.warning)|\(part.style?.rawValue ?? "-")"
-        }.joined(separator: "#") + "@\(font.pointSize)"
+            let meters = part.windows.map {
+                "\($0.kind.rawValue):\($0.validRemaining.map { String(format: "%.1f", $0) } ?? "-")"
+            }.joined(separator: ",")
+            return "\(part.accessibilityText)|\(meters)|\(part.warning)|\(part.style?.rawValue ?? "-")"
+        }.joined(separator: "#") + "@\(font.pointSize)|\(settings.displayMode.rawValue)|\(settings.warnBelowRemaining)"
         // The Antigravity icon spins while it works, so during that the title
         // genuinely differs every frame and must not be skipped.
             + (animationTimer == nil ? "" : "~\(animationPhase)")
@@ -614,11 +652,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let color: NSColor = part.warning ? .systemRed : .labelColor
             title.append(BrandIcons.attachment(part.icon, font: font, color: color))
             title.append(NSAttributedString(string: " ", attributes: [.font: font]))
-            if let remaining = part.remainingPercent, let style = part.style, style.showsMeter {
-                title.append(MiniMeter.attachment(remainingPercent: remaining, style: style, font: font, color: color))
-                if style.showsPercent {
-                    title.append(NSAttributedString(string: " " + part.text, attributes: [.font: font, .foregroundColor: color]))
-                }
+            if !part.windows.isEmpty, let style = part.style {
+                title.append(MiniMeter.attachment(windows: part.windows, style: style, font: font,
+                                                  mode: settings.displayMode, warnBelow: settings.warnBelowRemaining))
             } else {
                 title.append(NSAttributedString(string: part.text, attributes: [.font: font, .foregroundColor: color]))
             }
@@ -627,49 +663,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title.append(NSAttributedString(string: "AI —", attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
         }
         button.attributedTitle = title
-        button.toolTip = "AI Usage Bar — Click to view usage"
-    }
-
-    private func claudeTitleValue(_ snap: UsageSnapshot) -> String {
-        guard let l = snap.claudeLimits else { return "—" }
-        switch l.state {
-        case .ok:
-            if let low = lowestClaudeRemaining(snap) {
-                return AppSettings.shared.displayMode.shortText(remaining: low)
-            }
-            // Both windows hidden from the menu bar — fall back to tokens.
-            if let c = snap.claude { return formatTokens(c.total) }
-            return "—"
-        case .stale: return "stale"
-        case .unavailable: return "—"
-        case .error: return "!"
-        }
-    }
-
-    /// Lowest remaining % across the Claude windows the user chose to show in
-    /// the menu bar; nil when limits are absent or both windows are hidden.
-    private func lowestClaudeRemaining(_ snap: UsageSnapshot) -> Double? {
-        guard let l = snap.claudeLimits, case .ok = l.state else { return nil }
-        let s = AppSettings.shared
-        var values: [Double] = []
-        if s.isLimitWindowShown(.fiveHour, for: .claude), let w = l.fiveHour { values.append(w.remainingPercent) }
-        if s.isLimitWindowShown(.weekly, for: .claude), let w = l.sevenDay { values.append(w.remainingPercent) }
-        return values.min()
-    }
-
-    /// Codex has no live API here — the reading is whatever the last Codex
-    /// session logged. Weekly window only; Codex retired its 5-hour window.
-    /// Returns nil when even that is missing.
-    private func codexTitleValue(_ snap: UsageSnapshot) -> (text: String, remaining: Double)? {
-        guard let l = snap.codexLimits else { return nil }
-        let settings = AppSettings.shared
-        if settings.isLimitWindowShown(.weekly, for: .codex), let s = l.secondary, !isExpired(s) {
-            return (settings.displayMode.shortText(remaining: s.remainingPercent), s.remainingPercent)
-        }
-        if settings.isLimitWindowShown(.fiveHour, for: .codex), let s = l.primary, !isExpired(s) {
-            return (settings.displayMode.shortText(remaining: s.remainingPercent), s.remainingPercent)
-        }
-        return nil
     }
 
     private func isExpired(_ w: LimitWindow) -> Bool {

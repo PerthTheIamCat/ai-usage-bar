@@ -17,9 +17,12 @@ translucent treatment with no missing functionality.
 
 ## What it shows
 
-`✳ 42%  ◇ 63%` in the menu bar means the tightest remaining limit for the
-detected providers. Click it and the popover opens on **Overview** — the
-question it exists to answer, and nothing else:
+Each provider shows its 5-hour and weekly limits separately. Bars stack with
+5h above W; rings use an outer 5h ring and an inner weekly ring. The
+“+ percent” styles add small labeled values in two rows. Missing readings
+keep a dim track and show `—` when percentages are enabled. Hover over the
+menu bar for full window values and the ring legend. Click it to open the
+popover on **Overview**:
 
 - **Lowest remaining** — a headline ring for the single tightest window across
   every provider, so "how much do I have left right now" never needs
@@ -120,6 +123,7 @@ Code, Codex, and Antigravity) independently:
 - reorder providers and show/hide them separately in the menu bar and popover;
 - choose a menu-bar style per provider: Bar, Ring, Percent only, Bar + percent,
   Ring + percent, or Dot + percent;
+- choose used or remaining percentages (used by default; saved choices are preserved);
 - choose which rate-limit windows and detail rows each provider exposes.
 
 The popover's **Export…** menu can copy a Markdown report, JSON, or CSV, or
