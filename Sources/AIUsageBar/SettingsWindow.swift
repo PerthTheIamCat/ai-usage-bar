@@ -413,6 +413,84 @@ private struct ProviderConfiguration: View {
     let kind: ProviderKind
     @ObservedObject private var settings = AppSettings.shared
 
+    private struct DataSource: Identifiable {
+        let id: String
+        let title: String
+        let url: URL
+        let note: String
+    }
+
+    private var dataSources: [DataSource] {
+        switch kind {
+        case .claude:
+            return [
+                DataSource(
+                    id: "claude-cli-logs",
+                    title: "Claude Code · usage logs",
+                    url: UsageReader.claudeDir,
+                    note: "CLI sessions"),
+                DataSource(
+                    id: "claude-desktop-usage",
+                    title: "Claude Desktop · usage samples",
+                    url: ClaudeLimitsReader.desktopPlanUsageURL,
+                    note: "Desktop app limits"),
+                DataSource(
+                    id: "claude-cli-limits",
+                    title: "Claude Code · rate limits",
+                    url: ClaudeLimitsReader.statusLineSnapshotURL,
+                    note: "CLI status line"),
+            ]
+        case .codex:
+            return [
+                DataSource(
+                    id: "codex-cli-logs",
+                    title: "Codex · usage logs",
+                    url: UsageReader.codexDir,
+                    note: "CLI sessions"),
+            ]
+        case .antigravity:
+            return [
+                DataSource(
+                    id: "antigravity-cli-history",
+                    title: "Antigravity CLI · activity",
+                    url: UsageReader.antigravityDir.appendingPathComponent("history.jsonl"),
+                    note: "CLI history"),
+                DataSource(
+                    id: "antigravity-ide-conversations",
+                    title: "Antigravity IDE · activity",
+                    url: UsageReader.antigravityIDEDir.appendingPathComponent("conversations"),
+                    note: "Desktop app conversations"),
+                DataSource(
+                    id: "antigravity-cli-limits",
+                    title: "Antigravity CLI · quota snapshot",
+                    url: AntigravityLimitsReader.statusLineSnapshotURL,
+                    note: "CLI status line"),
+            ]
+        }
+    }
+
+    private var capabilityDescription: String {
+        switch kind {
+        case .claude:
+            return "Claude Desktop provides usage percentages; CLI status line adds reset times when available."
+        case .codex:
+            return "Reads local Codex CLI session logs."
+        case .antigravity:
+            return "Reads CLI and IDE activity; quota is available from the CLI status line."
+        }
+    }
+
+    private func displayPath(for url: URL) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return url.path.hasPrefix(home) ? "~" + url.path.dropFirst(home.count) : url.path
+    }
+
+    private func revealInFinder(_ url: URL) {
+        let fileManager = FileManager.default
+        let target = fileManager.fileExists(atPath: url.path) ? url : url.deletingLastPathComponent()
+        NSWorkspace.shared.activateFileViewerSelecting([target])
+    }
+
     private func detailBinding(_ detail: ProviderDetailKind) -> Binding<Bool> {
         Binding(
             get: { settings.providerDetails[kind]?.contains(detail) ?? true },
@@ -421,6 +499,49 @@ private struct ProviderConfiguration: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            Text("Data sources")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+            Text(capabilityDescription)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            ForEach(dataSources) { source in
+                HStack(spacing: 7) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(source.title)
+                            if !FileManager.default.fileExists(atPath: source.url.path) {
+                                Text("Not found")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        Text("\(source.note) · \(displayPath(for: source.url))")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 4)
+                    Button {
+                        revealInFinder(source.url)
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Reveal in Finder")
+                    .accessibilityLabel("Reveal \(source.title) in Finder")
+                }
+            }
+
             Divider()
             Text("Popover details")
                 .font(.system(size: 11, weight: .semibold))

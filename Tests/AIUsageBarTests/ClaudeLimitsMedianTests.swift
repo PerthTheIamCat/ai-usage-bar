@@ -29,6 +29,24 @@ final class ClaudeLimitsMedianTests: XCTestCase {
         let values = [1.0, 1.1, 0.9, 1.0, 50.0]
         XCTAssertEqual(ClaudeLimitsReader.median(values), 1.0)
     }
+
+    func testParsesUnixResetTimestampWhenClaudeProvidesIt() {
+        let reset = Date(timeIntervalSince1970: 1_738_425_600)
+        let window = ClaudeLimitsReader.parseWindow([
+            "used_percentage": 18.0,
+            "resets_at": reset.timeIntervalSince1970,
+        ])
+
+        XCTAssertEqual(window?.usedPercent, 18)
+        XCTAssertEqual(window?.resetsAt, reset)
+    }
+
+    func testDesktopStyleWindowWithoutResetRemainsValid() {
+        let window = ClaudeLimitsReader.parseWindow(["used_percentage": 22.0])
+
+        XCTAssertEqual(window?.usedPercent, 22)
+        XCTAssertNil(window?.resetsAt)
+    }
 }
 
 /// The five-hour projection calibrates against these weights rather than raw

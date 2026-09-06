@@ -275,6 +275,51 @@ struct ClaudeStatusLineSetupPrompt: View {
     }
 }
 
+/// The desktop IDE and the CLI expose different local data. The IDE keeps
+/// conversations in SQLite but does not persist the CLI's status-line quota
+/// payload, so explain that state instead of offering a CLI-only setup button.
+struct AntigravityStatusLineSetupPrompt: View {
+    let isIDE: Bool
+    @State private var setupState = AntigravityStatusLineSetup.currentState()
+    @State private var resultMessage: String?
+    @State private var resultIsError = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if isIDE {
+                NoteText(text: "Antigravity IDE detected. Activity is read from its local conversations.")
+                NoteText(text: "The IDE does not persist quota data in the CLI status-line format yet.")
+            } else {
+                switch setupState {
+                case .configured:
+                    NoteText(text: "Status line bridge is configured — use Antigravity CLI once to send a quota reading.")
+                case .notConfigured:
+                    NoteText(text: "No local Antigravity quota reading yet. Set up the status line bridge for the CLI:")
+                    Button("Set Up CLI Status Line") {
+                        let result = AntigravityStatusLineSetup.install()
+                        switch result {
+                        case .success:
+                            resultMessage = "Bridge installed. Restart Antigravity CLI, then use it once to send a quota reading."
+                            resultIsError = false
+                            setupState = AntigravityStatusLineSetup.currentState()
+                        case .failure(let error):
+                            resultMessage = error.errorDescription
+                            resultIsError = true
+                        }
+                    }
+                    .font(.system(size: 11))
+                }
+            }
+            if let resultMessage {
+                Text(resultMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(resultIsError ? Color.red : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 // MARK: - Overview (default landing pane — "how much do I have left")
 
 /// A slimmer limit row for cards: label, thin bar, and percent on one line,
@@ -510,7 +555,7 @@ struct OverviewPane: View {
                     kind: kind, title: "Antigravity",
                     fiveHour: shown(.fiveHour, for: kind, g.fiveHour),
                     weekly: shown(.weekly, for: kind, g.weekly),
-                    problem: (g.fiveHour == nil && g.weekly == nil) ? "No quota data yet — use Antigravity once" : nil,
+                    problem: (g.fiveHour == nil && g.weekly == nil) ? (g.isIDE ? "IDE activity detected · quota unavailable" : "No quota data yet · tap for CLI setup") : nil,
                     todayLine: "\(g.totalPrompts) prompts · \(formatUSD(Pricing.antigravityCostUSD(g))) today")
             }
         }
@@ -622,6 +667,25 @@ struct ClaudePane: View {
             .sorted { $0.costUSD > $1.costUSD }
     }
 
+    @ViewBuilder
+    private func claudeLimitRows(_ l: ClaudeLimits) -> some View {
+        if settings.isLimitWindowShown(.fiveHour, for: .claude), let w = l.fiveHour {
+            limitRowOrNote("5-hour", w, provider: .claude, windowKind: .fiveHour)
+        }
+        if settings.isLimitWindowShown(.weekly, for: .claude), let w = l.sevenDay {
+            limitRowOrNote("Weekly", w, provider: .claude, windowKind: .weekly)
+        }
+        if !settings.isLimitWindowShown(.fiveHour, for: .claude)
+            && !settings.isLimitWindowShown(.weekly, for: .claude) {
+            NoteText(text: "Both windows hidden — enable in Settings › Providers")
+        }
+        if case .desktopApp? = l.source,
+           l.fiveHour?.resetsAt == nil,
+           l.sevenDay?.resetsAt == nil {
+            NoteText(text: "Reset time is not provided by Claude Desktop")
+        }
+    }
+
     /// Sorted most-recently-used first — answers "what did I just use" as
     /// well as "which skills, how often."
     private var skillBreakdown: [(skill: String, count: Int, lastUsed: Date?)] {
@@ -696,16 +760,12 @@ struct ClaudePane: View {
         if let l = snap.claudeLimits {
             switch l.state {
             case .ok:
-                if settings.isLimitWindowShown(.fiveHour, for: .claude), let w = l.fiveHour { limitRowOrNote("5-hour", w, provider: .claude, windowKind: .fiveHour) }
-                if settings.isLimitWindowShown(.weekly, for: .claude), let w = l.sevenDay { limitRowOrNote("Weekly", w, provider: .claude, windowKind: .weekly) }
-                if !settings.isLimitWindowShown(.fiveHour, for: .claude)
-                    && !settings.isLimitWindowShown(.weekly, for: .claude) {
-                    NoteText(text: "Both windows hidden — enable in Settings › Providers")
-                }
+                claudeLimitRows(l)
             case .unavailable:
                 ClaudeStatusLineSetupPrompt()
             case .stale:
                 NoteText(text: "Local Claude statusline data is stale — use Claude Code again")
+                claudeLimitRows(l)
             case .error(let message):
                 NoteText(text: "Claude local limits unavailable — \(message)")
             }
@@ -814,13 +874,10 @@ struct AntigravityPane: View {
         let fiveHour = settings.isLimitWindowShown(.fiveHour, for: .antigravity) ? g.fiveHour : nil
         let weekly = settings.isLimitWindowShown(.weekly, for: .antigravity) ? g.weekly : nil
         if fiveHour == nil && weekly == nil {
-            NoteText(text: "No quota data yet — use Antigravity once to refresh it")
+            AntigravityStatusLineSetupPrompt(isIDE: g.isIDE)
         } else {
-            // Codex already states its reading's age plainly instead of
-            // presenting it as live. Antigravity's quota cache carries no
-            // timestamp of its own — this is the file's mtime — but a
-            // reading from an hour ago should read that way too, not look
-            // identical to one from just now.
+            // Keep the observation age visible so a cached Antigravity
+            // reading from an hour ago never looks identical to a live one.
             if let asOf = g.asOf {
                 CaptionText(title: "Limits · as of \(humanAgo(asOf))")
             }
@@ -1082,16 +1139,17 @@ struct PopoverFooter: View {
                 .id(viewModel.nextRefreshAt)
             }
 
-            Text("AI Usage Bar v\(appVersion)")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text("AI Usage Bar v\(appVersion)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("Check for Updates…", action: onCheckForUpdates)
+            }
 
             HStack(spacing: 8) {
                 Button("Refresh Now", action: onRefresh)
-                Button("Check for Updates…", action: onCheckForUpdates)
-                Spacer()
-            }
-            HStack(spacing: 8) {
+                Spacer(minLength: 0)
                 Menu {
                     Button("Copy Markdown report") { copy(onExportReport) }
                     Button("Copy JSON") { copy(onExportJSON) }
@@ -1101,11 +1159,7 @@ struct PopoverFooter: View {
                 } label: {
                     Label(justCopied ? "Copied!" : "Export…", systemImage: "square.and.arrow.up")
                 }
-                Spacer()
-            }
-            HStack(spacing: 8) {
                 Button("Settings…", action: onSettings)
-                Spacer()
                 Button("Quit", action: onQuit)
             }
         }

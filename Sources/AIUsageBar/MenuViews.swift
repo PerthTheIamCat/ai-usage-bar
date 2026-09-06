@@ -24,6 +24,41 @@ enum ProviderColor {
     static let antigravity = BrandIcons.geminiBrandColor
 }
 
+/// The menu bar is a translucent surface, so the default label colors can
+/// collapse into a wallpaper or accent color. Keep the meter pair separate
+/// from popover colors and resolve it against the actual macOS appearance.
+/// Light mode uses a near-black fill on a soft black track; dark mode uses
+/// the corresponding white pair. Both keep enough contrast without looking
+/// like a heavy toolbar control.
+private enum MenuBarMeterPalette {
+    static let fill = NSColor(name: "AIUsageBarMeterFill") { appearance in
+        switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
+        case .darkAqua:
+            return NSColor.white.withAlphaComponent(0.96)
+        default:
+            return NSColor(calibratedWhite: 0.08, alpha: 0.92)
+        }
+    }
+
+    static let track = NSColor(name: "AIUsageBarMeterTrack") { appearance in
+        switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
+        case .darkAqua:
+            return NSColor.white.withAlphaComponent(0.30)
+        default:
+            return NSColor.black.withAlphaComponent(0.24)
+        }
+    }
+
+    static let secondaryLabel = NSColor(name: "AIUsageBarMeterSecondaryLabel") { appearance in
+        switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
+        case .darkAqua:
+            return NSColor.white.withAlphaComponent(0.88)
+        default:
+            return NSColor.black.withAlphaComponent(0.84)
+        }
+    }
+}
+
 /// Draws a capsule meter filling `rect` in the current graphics context —
 /// shared by `LimitBarView` (a live popover NSView) and `MiniMeter` (an
 /// offscreen NSImage for the menu-bar title), so the two only ever draw the
@@ -122,11 +157,10 @@ enum MiniMeter {
         return NSImage(size: size, flipped: false) { _ in
             for (index, window) in windows.enumerated() {
                 let remaining = window.validRemaining
-                let color: NSColor = remaining.map { $0 < warnBelow ? .systemRed : .labelColor } ?? .tertiaryLabelColor
+                let color: NSColor = remaining.map { $0 < warnBelow ? .systemRed : MenuBarMeterPalette.fill } ?? MenuBarMeterPalette.secondaryLabel
                 let fraction = remaining.map { (mode == .used ? 100 - $0 : $0) / 100 }
                 let y = height - CGFloat(index + 1) * rowHeight
-                // Semantic shades follow macOS appearance and contrast settings.
-                let trackColor: NSColor = remaining == nil ? .quaternaryLabelColor : .tertiaryLabelColor
+                let trackColor: NSColor = remaining == nil ? MenuBarMeterPalette.track.withAlphaComponent(0.45) : MenuBarMeterPalette.track
                 if isRing {
                     // Outer = 5h, inner = weekly; keep that mapping if a window is hidden.
                     let diameter: CGFloat = isSingleRow ? 20 : (window.kind == .fiveHour ? 20 : 12)
@@ -169,7 +203,7 @@ enum MiniMeter {
                     let x = meterWidth + gap
                     let textY = y + (rowHeight - 11) / 2
                     drawText(window.label, in: NSRect(x: x, y: textY, width: 15, height: 11),
-                             font: .systemFont(ofSize: isSingleRow ? 10 : 9, weight: .regular), color: .secondaryLabelColor)
+                             font: .systemFont(ofSize: isSingleRow ? 10 : 9, weight: .regular), color: MenuBarMeterPalette.secondaryLabel)
                     if style.showsPercent {
                         let text = remaining.map { mode.shortText(remaining: $0) } ?? "—"
                         drawText(text, in: NSRect(x: x + 17, y: textY, width: numberWidth, height: 11),

@@ -251,7 +251,9 @@ enum ClaudeLimitsReader {
             : sorted[middle]
     }
 
-    private static func parseWindow(_ raw: Any?) -> LimitWindow? {
+    /// Parses Claude Code's documented rate-limit window. Kept internal so
+    /// the Unix reset timestamp contract has a direct regression test.
+    static func parseWindow(_ raw: Any?) -> LimitWindow? {
         guard let d = raw as? [String: Any],
               let used = number(d["used_percentage"] ?? d["used_percent"])
         else { return nil }

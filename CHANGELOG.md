@@ -2,620 +2,285 @@
 
 All notable changes to AI Usage Bar are documented in this file.
 
+## [Unreleased]
+
+## [0.13.0] - 2026-09-06
+
+### Added
+
+- **Provider source paths:** See where each provider reads data and reveal the path in Finder.
+
+### Fixed
+
+- **Popover footer:** Actions now use two compact rows, leaving more room for usage details.
+- **Claude reset rows:** Stale readings keep their reset countdown when Claude provides one.
+- **Light-theme meters:** Bars and labels stay readable on translucent light menu bars.
+- **Antigravity detection:** IDE conversations are detected even without CLI history.
+- **Antigravity quota:** CLI status-line quota and reset data can be captured locally.
+
 ## [0.12.0] - 2026-09-05
 
 ### Added
 
-- **Dual-window menu-bar meters.** Each provider can show its 5-hour and
-  weekly limits together. Bars stack into two compact rows; rings use clear
-  concentric layers with 5h on the outside and weekly inside.
-- **Native display presets in General settings.** Six radio-style choices now
-  show a live menu-bar preview: Bar, Ring, Percent only, Bar + percent,
-  Ring + percent, and Dot + percent.
-- **Window visibility controls.** Choose 5h, weekly, both, or none from one
-  compact control. A single visible row grows to use the available menu-bar
-  height, while two rows stay compact.
+- **Dual-window meters:** Show 5-hour and weekly usage together as stacked bars or concentric rings.
+- **Display presets:** Choose Bar, Ring, Percent, or combined styles with a live preview.
+- **Window visibility:** Show 5-hour, weekly, both, or neither; a single row expands to use the space.
 
 ### Changed
 
-- Usage percentages now default to **used**, with the existing preference
-  preserved when already saved.
-- Menu-bar meters use semantic macOS colors, compact labels, and dim missing
-  readings so the display remains legible across light and dark appearances.
+- **Usage labels:** Percentages default to used.
+- **Meter colors:** Semantic macOS colors keep readings clear in light and dark appearances.
 
 ## [0.11.1] - 2026-08-09
 
 ### Fixed
 
-- **The five-hour projection was calibrating against the wrong number.** It
-  fitted "percent of the window per token" against the total token count —
-  and on real usage 98% of every token counted is a cache read, which barely
-  moves that window at all. The fit was essentially against noise (r² 0.07
-  against the percentage moves actually recorded). It now weights tokens the
-  way the window is really consumed: output counts ten times as much as fresh
-  input, whether that input arrives as `input_tokens` or as a cache write, and
-  cached reads count for nothing (r² 0.89 on held-out data).
-- Removed the ceiling that kept the projection within a typical interval's
-  movement of the last real reading. It was there to contain a rate estimate
-  that could be wildly wrong, and it clamped hardest on exactly the bursts
-  worth warning about — a real 14-point climb was being shown as 1.3. With a
-  rate fitted against the right quantity the median across intervals is
-  enough on its own.
-
-Checked against the 1,198 readings Claude Desktop had recorded locally over
-three weeks, on the intervals where a projection is actually displayed: mean
-error 2.44 → **1.14** percentage points, worst under-read −29.5 → −10.1,
-worst over-read +9.5 → +8.5. Better in all three directions rather than
-traded off between them.
-
-Two things this does not change. The projection still only runs for people
-whose readings come from the Claude Desktop app — it needs that app's sample
-history to calibrate against, and the Claude Code statusLine bridge does not
-keep one. And the weights were fitted on a single account's history; they
-describe how the limit treats each kind of token, while the per-account scale
-is still fitted live, so a different plan is absorbed there rather than by
-these numbers.
+- **Five-hour projection:** Token weighting now matches how the window is consumed, improving projection accuracy.
+- **Large usage bursts:** The projection no longer hides real jumps behind a small movement cap.
 
 ## [0.11.0] - 2026-08-09
 
 ### Changed
 
-- **Battery.** macOS was reporting AI Usage Bar under "Using Significant
-  Energy", and it was right: the shipping build burned 33 minutes of CPU in
-  26 hours of running — about 2% of a core, continuously, to display two
-  percentages. This release is a rewrite of how the local logs are read, and
-  the measurements are at the end of this section. What was responsible:
-  - `codexLimits()` read every byte of the newest Codex session log on every
-    60-second tick to find one rate-limit reading near its end. On this
-    machine that file is 116 MB — about 83 GB read and JSON-scanned per 12
-    hours. It now reads a 2 MB tail (falling back to a full scan only if that
-    comes up empty) and caches the result against the file's mtime, so a tick
-    where Codex hasn't written costs nothing at all.
-  - Every log line was materialised three times: the whole file as a `String`,
-    then a `String` per line, then a re-encoded `Data` per line for
-    `JSONSerialization`. Lines are now split at the byte level out of the
-    memory-mapped file and handed straight to the parser, and the marker
-    filter (`"usage"`, `"token_count"`, …) runs on raw bytes via
-    `memchr`/`memcmp` — so a line that can't match costs no allocation.
-  - A refresh with nothing new to read now does no reading. A stat-only
-    signature of every source file is compared first; on an idle Mac the tick
-    is a few dozen `stat` calls instead of a full rescan.
-  - The 30-day history scan ran twice per pass (`periodCosts()` and
-    `dailyTrend()` each did their own), re-reading ~470 MB of logs for
-    identical numbers. It runs once and is cached against the same
-    stat-only signature.
-- Smaller repeats of the same shape: today's Claude logs were parsed twice per
-  refresh (the hourly timeline redid the token scan that was already cached),
-  Antigravity's quota cache was read and parsed twice per refresh (once per
-  window), and Antigravity's "is working" check ran four Unicode-correct
-  substring searches over an entire log file rather than its tail.
-- Periodic timers now declare a tolerance, letting macOS coalesce their
-  wake-ups with others instead of waking the CPU on their own schedule.
-- **Logs are now parsed once, not once per refresh.** Both CLIs only ever
-  append to a session log, so a refresh that finds a file 40 KB longer has
-  40 KB of new work — not the 34 MB (Claude) or 116 MB (Codex) the file has
-  grown to. Each file's parsed records are kept and extended in place, which
-  is what makes an *active* coding session cheap; the previous
-  fingerprint-keyed caches invalidated the moment a log was appended to, i.e.
-  exactly when they were needed. Today's totals, the session rows, the hourly
-  timeline, the burn-rate token events and the 30-day trend all read from
-  those records instead of walking the same files one to four more times
-  each.
-- Timestamps are parsed directly rather than through `ISO8601DateFormatter`,
-  and read out of a line's raw bytes rather than by parsing the JSON around
-  them — both were being paid once per log line. `Calendar.current` (which
-  rebuilds itself from user preferences on every access) is no longer touched
-  per line either.
-- The menu-bar title is only redrawn when it would actually look different,
-  instead of re-rendering its meter images every minute.
-
-Measured on the same Mac, over a run with an active Claude Code session
-writing to its log throughout: sustained CPU went from **2.12%** (33m26s of
-CPU across 26h of running, in 0.10.6) to **0.073%**, and resident memory
-settled at 29 MB instead of 45 MB. Verified against the previous
-implementation on the real ~1.1 GB of local logs: identical output, and
-identical 30-day trend across 20 recorded days apart from floating-point
-summation order (largest difference 2e-13 USD).
+- **Refresh performance:** Idle refreshes skip unchanged logs; active logs are read incrementally.
+- **History calculations:** Today, hourly, cost, and trend views reuse parsed records instead of rescanning the same files.
+- **Menu-bar redraws:** The title only redraws when its visible value changes.
+- **Resource use:** Sustained CPU fell from 2.12% to 0.073% and memory from 45 MB to 29 MB in the measured workload.
 
 ### Fixed
 
-- Usage silently read as empty after midnight. The UTC date prefixes used to
-  pick out "today" in the logs were computed once at launch and never again,
-  so an app left running across midnight kept filtering against the previous
-  day until it was relaunched.
-- The five-second watcher that picks up a fresh Claude limits reading had
-  quietly stopped working. `URL` caches file metadata on the instance, and the
-  two paths it polls are `static let`s — so every poll compared the mtime they
-  had at launch against itself, never saw a change, and never fired. New
-  readings only arrived on the next full refresh, up to a minute later.
-- The five-hour projection was calibrated against inflated token counts.
-  Claude Code writes the same assistant record two or three times per turn
-  (60 of 113 requests in a sample day), and while today's displayed total
-  correctly collapsed those duplicates, the token stream feeding the
-  projection did not — it saw 33.7M tokens where the app showed 19.9M. Both
-  now come from the same de-duplicated records.
+- **Midnight refresh:** An app left open across midnight now reads the new day.
+- **Claude limit watcher:** New status-line readings appear without waiting for a full refresh.
+- **Duplicate token events:** Projection totals now use the same de-duplicated records as the display.
 
 ## [0.10.6] - 2026-08-08
 
 ### Added
 
-- The macOS 26 Icon Composer source for the app icon (`Resources/AppIcon.icon`)
-  — same design as the shipping `.icns`, split into background/gloss/meter/
-  sparkle layers so it can be relit per appearance mode once this project has
-  an Xcode target to import it through. Not wired into this build yet:
-  `actool` accepts a bare `.icon` file dropped into a minimal asset catalog
-  without error, but produces no output — confirmed directly, not assumed.
-  Xcode's project system does real import work when you drag a `.icon` file
-  in that a standalone tool invocation doesn't replicate.
+- **Icon Composer source:** Added layered source artwork for a future macOS 26 icon asset.
 
 ### Fixed
 
-- Codex's 5-hour window could sit under the low-remaining threshold
-  indefinitely with no alert — only its weekly window was checked. Same
-  currently-inert-on-most-accounts caveat as the existing depletion check for
-  it: Codex retired the 5-hour window for most plans, so this mostly won't
-  fire today, but costs nothing to have ready for a plan that still reports
-  one.
+- **Codex five-hour alerts:** The low-remaining check now includes the five-hour window when available.
 
 ## [0.10.5] - 2026-08-08
 
 ### Fixed
 
-- The 0.10.4 release build failed in CI: the workflow ran on `macos-14`,
-  whose bundled Xcode predates the macOS 26 SDK entirely, so the Liquid
-  Glass code introduced in 0.10.4 failed to compile there — an
-  `@available(macOS 26.0, *)` guard makes a call safe at *runtime* on older
-  systems, but the *compiler* still needs the SDK that declared the symbol
-  to resolve it in the first place, regardless of the guard. `macos-14` is
-  also being deprecated by GitHub. Moved to `macos-26`, which ships Xcode 26
-  and the matching SDK preinstalled.
+- **Release build:** CI now builds with the macOS 26 SDK required by Liquid Glass.
 
 ## [0.10.4] - 2026-08-08
 
 ### Added
 
-- **"Switch there for now."** When one provider is critically low and another
-  has a real margin over it, the Overview pane suggests switching, with a tap
-  target straight to that provider's pane. Only fires when the gap is wide
-  enough (30+ points) to be worth the suggestion.
-- **Antigravity now shows a reading age.** Its quota cache carries no
-  timestamp of its own; the file's modification time is used instead, and
-  reads the same "as of X ago" way Codex's already did — a stale Antigravity
-  reading no longer looks identical to a live one.
-- **Local history survives log pruning.** Claude Code (and Codex) delete
-  local session logs after roughly a month; the 7-/30-day cost totals and the
-  Analytics trend chart used to rescan those logs from scratch every time, so
-  a day quietly went to zero forever the moment its file aged out — even a
-  day the app had measured correctly, repeatedly, in the weeks before. Each
-  day's totals are now captured to a local file the first time they're seen
-  with real activity, and a rescan that comes back empty for a day falls back
-  to what was captured before that day's log was pruned. On this machine the
-  very first run recovered 20 days of history, some already within a week of
-  its likely prune date.
-- **A real test suite.** 29 tests covering the burn-rate regression, the
-  daily-history record/backfill logic, the byte-scan log scanner against
-  `String.contains`, and Claude's median calibration — all converted from
-  one-off scratch checks that were previously written, run once, and thrown
-  away. `BurnRateTracker` and `DailyHistoryStore` now take an injectable
-  backing store so tests never touch this Mac's real UserDefaults or files.
-- **Liquid Glass on macOS 26.** The popover's cards (provider cards, the hero
-  card, the switch-provider banner) now render with real `.glassEffect()`
-  material — verified against the actual macOS 26 SDK before shipping, not
-  assumed. Falls back to the previous translucent treatment on anything
-  earlier; nothing regresses for anyone not yet on Tahoe. The two tappable
-  panels use the interactive glass variant for real press-down feedback.
+- **Provider switching:** Overview suggests a provider with more remaining capacity.
+- **Reading age:** Antigravity shows how old its cached quota is.
+- **History retention:** Daily totals survive Claude Code and Codex log pruning.
+- **Test coverage:** Added automated tests for parsing, history, projections, and byte scanning.
+- **Liquid Glass:** Popover cards use the native material on macOS 26.
 
 ### Changed
 
-- The 7-/30-day cost totals are now derived from the same 30-day scan the
-  trend chart already does, instead of running a second independent one —
-  the per-day buckets already apply full per-model pricing, so summing them
-  is exactly equivalent, and it removes a redundant full log walk every time
-  historical stats are calculated.
+- **Historical costs:** 7-day and 30-day totals reuse the trend scan.
 
 ### Fixed
 
-- The Claude five-hour projection re-derived its token-event list — which
-  means re-walking and re-fingerprinting the entire `~/.claude/projects`
-  tree — once per calibration interval, up to ~17 times per reading. The
-  underlying files cannot change mid-calculation, so this was pure waste that
-  would have compounded as the log tree grows over months; found during a
-  live CPU/security audit prompted directly by a concern about the app
-  pegging a core again. Now scanned once per calibration.
-- The Antigravity working-indicator's icon animation ran a timer at 12.5 Hz
-  unconditionally from launch, forever, gated only by an internal check that
-  no-opped whenever Antigravity wasn't actually active — which is most of the
-  time for most people. It now starts only when Antigravity starts working
-  and stops the moment it's done, instead of running at all times and
-  silently discarding almost every tick.
+- **Projection work:** Claude calibration scans logs once per interval.
+- **Antigravity animation:** The working indicator runs only while a task is active.
 
 ## [0.10.3] - 2026-08-08
 
 ### Added
 
-- **Depletion warnings.** Every comparable usage tracker in this space
-  converges on the same feature independently, so it earned a spot here too:
-  the 5-hour window's recent readings are fit to a straight line, and when
-  the current pace projects hitting 100% before the window resets, the
-  popover swaps the reset caption for "hits the limit around HH:MM" and a
-  notification fires once per window instance (separate from the existing
-  low-remaining alert, and never on an estimated Claude reading — an
-  estimate that overshot would raise a warning the next real reading then
-  contradicted). Pace is fit from the last 45 minutes of whatever readings
-  the app already displays, kept on disk so a relaunch doesn't lose it, and
-  reset automatically when a window rolls over.
+- **Depletion warnings:** The popover warns when the current pace reaches a limit before reset.
 
 ## [0.10.2] - 2026-08-08
 
 ### Changed
 
-- The projected five-hour figure now re-fits itself continuously. It used to
-  derive its percent-per-token rate from the single previous interval, which
-  made it swing with whatever that one interval happened to contain. It now
-  fits across the last 16 readings, takes the median so an unusual interval
-  cannot drag it, skips intervals where the window rolled over or where the
-  token history does not reach back far enough, and re-fits every time a new
-  real reading lands. Backtested against recorded samples, mean absolute
-  error dropped from 3.5 to 1.9 percentage points and the worst case from
-  12.0 to 8.9.
-- Token history for today is now gathered in one cached pass instead of a
-  fresh log scan per interval, so fitting over many intervals costs no more
-  than fitting over one.
+- **Projection calibration:** Five-hour estimates fit the last 16 readings and ignore reset or incomplete intervals.
+- **Token history:** Projection inputs are gathered in one cached pass.
 
 ## [0.10.1] - 2026-08-08
 
 ### Fixed
 
-- The popover looked like separate slabs stitched together. It draws on the
-  system's vibrant material, but the sidebar and the Overview cards painted
-  an opaque control colour over it while the footer stayed translucent, so
-  parts of the panel showed the desktop through and parts did not. Those
-  panels now use a light translucent fill layered on the same material, and
-  the popover reads as one surface.
-- Enabling Reduce Transparency now switches the popover to solid backgrounds
-  instead of leaving translucent panels in place.
+- **Popover surface:** Sidebar, cards, and footer now share one translucent material.
+- **Reduce Transparency:** The popover uses solid backgrounds when the system setting is enabled.
 
 ## [0.10.0] - 2026-08-08
 
-### Important
+### Notes
 
-- **Update manually from the release page.** The bundle identifier changed
-  from `com.perth.aiusagebar` to `com.perththeiamcat.aiusagebar` (see below),
-  so macOS treats this as a different app and the in-app updater cannot
-  replace an older install. Download the ZIP, replace `AIUsageBar.app` in
-  `/Applications`, and re-grant notification permission if you use alerts.
-  Your settings carry over automatically on first launch.
-
-### Fixed
-
-- **The menu bar icon could stop appearing entirely.** The app ran, read
-  usage correctly, and created its status item, but macOS refused to assign
-  that item a menu bar slot and parked it off-screen — so the app looked like
-  it never launched and there was no way to reach the popover. The state was
-  held against the old bundle identifier and survived logout, preference
-  resets, Launch Services cleanup, and Control Center restarts; changing the
-  identifier is what releases it. Settings are migrated to the new domain on
-  first launch.
-- Startup pegged a CPU core and took ~45 seconds on large histories, which
-  macOS's watchdog could terminate outright. Log lines are now scanned for
-  their ASCII markers a byte at a time instead of through `String.contains`,
-  which does full Unicode grapheme comparison; startup is ~11 seconds on the
-  same data.
-- The popover ignored the Remaining/Used setting and always printed
-  remaining, while its meter and the menu bar honoured it — the same window
-  read "11%" in one place and "89%" in another.
-- Session rows showed the project folder rather than the session title.
-  Claude Code's automatic `ai-title` is now read alongside a manually set
-  title, with the manual one always winning. Codex writes no title of its
-  own, so those rows still fall back to the workspace name.
-- The menu bar flashed a placeholder on every refresh instead of only during
-  the first load, and progress now goes to the tooltip and popover footer.
-- Sidebar labels wrapped onto a second line when selected, and long provider
-  names were clipped.
-- A second copy of the app launching under the same identifier fought the
-  first one over the status item; duplicate launches now exit immediately.
-- Installing the Claude Code status line bridge into an empty
-  `~/.claude/settings.json` produced invalid JSON.
+- **Upgrade:** Replace older installs manually because the bundle identifier changed; settings migrate automatically.
+- **Claude Desktop limitation:** Desktop files provide percentages but no reset time; reset times require the Claude Code status-line bridge.
 
 ### Added
 
-- Claude limits are now read from the Claude Desktop app's own local usage
-  file when the Claude Code status line bridge has no reading. Desktop-only
-  users get limits with no setup at all, and whichever source is fresher
-  wins.
-- A **Set Up Status Line Bridge** button in the popover installs the Claude
-  Code bridge in one click, backing up `~/.claude/settings.json` first and
-  refusing to touch an existing `statusLine` entry.
-- Both Claude limit sources are now watched directly, so a new reading shows
-  up within seconds of being written instead of waiting for the next
-  once-a-minute refresh.
-- Between the Claude Desktop app's occasional samples, the five-hour figure
-  is projected forward from the tokens actually logged since the last
-  reading. The rate is calibrated from your own previous interval rather than
-  an assumed formula, capped at one interval's worth of movement, shown with
-  a leading `~`, and never used to raise a limit notification.
-
-### Known limits
-
-- Reset times are only available through the Claude Code status line bridge.
-  The Desktop app's file carries percentages but no reset time, so those rows
-  no longer show a permanently empty "resets in —" caption.
+- **Claude Desktop readings:** Limits appear from the Desktop app's local usage file without setup.
+- **Claude status-line bridge:** Install the CLI bridge from the popover with a settings backup.
+- **Live Claude updates:** Both local limit files are watched for new readings.
+- **Estimated five-hour usage:** Desktop readings can project forward from logged Claude Code tokens.
 
 ### Changed
 
-- The popover opens on a new **Overview** pane built around the one question
-  it exists to answer: a headline showing the single tightest window across
-  every provider, then one compact card per provider with its meters, reset
-  time, and today's tokens and cost. Token breakdowns, sessions, skills, and
-  trends moved one click away into the per-provider tabs.
-- Session lists show the three most recent of today's sessions with no
-  expansion; skills and tools within a session are laid out as an aligned
-  table with counts and costs in columns instead of one run-on paragraph.
-  Full lists remain available through Export.
-- The General settings menu-bar style control now applies to every provider.
-  It was bound to a stored default that per-provider styles always shadowed,
-  so changing it appeared to do nothing.
-- The menu bar title dropped its redundant "AI" prefix and wide separators,
-  which frees roughly 30pt of menu bar space.
+- **Overview:** The popover opens on the tightest limit, then shows one compact card per provider.
+- **Session lists:** Recent sessions are compact; full details remain available through Export.
+- **General style:** One menu-bar style setting now applies to every provider.
+- **Menu-bar title:** Removed the redundant “AI” prefix and wide separators.
+
+### Fixed
+
+- **Menu-bar visibility:** Changed the bundle identifier to recover status items hidden by macOS.
+- **Startup time:** Byte-level log scanning reduced startup work on large histories.
+- **Used/remaining labels:** Popover text now matches the selected display mode.
+- **Session titles:** Rows prefer custom titles, then automatic titles, then the workspace name.
+- **Refresh feedback:** Progress appears in the tooltip and footer without flashing placeholders.
+- **Sidebar layout:** Selected and long labels no longer wrap or clip.
+- **Duplicate launches:** A second copy exits instead of competing for the status item.
+- **Claude settings:** An empty settings file remains valid after bridge setup.
 
 ## [0.9.0] - 2026-08-02
 
 ### Added
 
-- Providers settings now covers Claude Code, Codex, and Antigravity with
-  independent menu-bar/popover visibility, limit-window choices, detail rows,
-  ordering, and six menu-bar styles (including combined meter + percentage
-  styles).
-- Session explorer rows show estimated cost per session and associated
-  skill/tool costs. Reports can be copied as Markdown, JSON, or CSV, or saved
-  as a CSV file.
-- Optional large-session notifications, session ID/workspace privacy toggles,
-  and fingerprint-based session-summary caching.
+- **Provider settings:** Configure visibility, windows, details, order, and six menu-bar styles per provider.
+- **Session costs:** See estimated cost for each session and its skills/tools.
+- **Reports:** Copy or save usage as Markdown, JSON, or CSV.
+- **Notifications:** Enable large-session alerts and optional privacy controls.
+- **Summary cache:** Session summaries are cached by fingerprint.
 
 ## [0.8.0] - 2026-07-25
 
-### Changed
-
-- Updates now ask before installing instead of installing silently in the
-  background, so the "what's new" dialog with this release's notes actually
-  shows up before you update. The release pipeline also embeds the matching
-  CHANGELOG section directly in the update feed instead of only linking out
-  to the GitHub release page.
-
 ### Added
 
-- Skills used today now tracks last-used time per skill, not just a count
-  — the list sorts most-recently-used first instead of by count, so it
-  answers "what did I just use" as well as "which skills, how often."
-  `--dump` prints the same ordering.
+- **Skill activity:** Skills sort by most recent use as well as count.
+- **Budget alerts:** Set a daily or 30-day spend cap with an 80% warning.
+- **Usage reports:** Copy today's summary as plain text.
+- **Calendar heatmap:** Review daily cost activity across the last 30 days.
 
 ### Changed
 
-- Limit style (bar/ring/percent) moved to the menu bar — it was originally
-  wired to the popover's rows in 0.7.0, but that was the wrong surface; the
-  popover always shows the full bar meter now, same as before 0.7.0. The
-  menu bar's compact title draws a small inline bar or ring graphic instead
-  of (or alongside) the percentage, per the Settings › General picker.
-
-### Added
-
-- Budget alert (Settings › Cost) — set a $/day or $/30-days cap; the menu
-  bar shows a warning segment and the popover's Analytics pane shows a
-  banner once spend crosses 80% of it.
-- Native notifications when a limit window drops below the warn threshold
-  or the budget alert goes over (Settings › General toggle) — fires once
-  per crossing, not repeatedly.
-- "Copy Usage Report" button in the popover footer — copies a plain-text
-  summary of today's stats to the clipboard.
-- Calendar heatmap in the Analytics pane (Settings-free, always on) — a
-  GitHub-contributions-style grid over the last 30 days, reusing the same
-  trend data already fetched for the trend chart.
+- **Update flow:** Updates ask before installing and include release notes.
+- **Menu-bar styles:** Bar and ring graphics moved to the menu bar; the popover keeps full meters.
 
 ### Fixed
 
-- Hourly chart's per-provider legend and both charts' axis labels were
-  rendering garbled/missing. Cause: a detached `NSTextField` had `.frame`
-  set but was never added as a subview, so nothing established a
-  coordinate offset for it — calling `.draw(text.bounds)` on it directly
-  ignored `frame.origin` entirely and drew every label piled up at the
-  parent view's origin instead of its intended position. Replaced with
-  direct `NSString.draw(in:withAttributes:)`, which honors the given rect
-  correctly (same technique the "No usage recorded" placeholder already
-  used, just not consistently).
+- **Analytics labels:** Chart legends and axis labels now render in the correct positions.
 
 ## [0.7.0] - 2026-07-25
 
 ### Added
 
-- Customizable limit display style — Settings › General now has a Bar /
-  Ring / Percent-only picker for how each limit window is drawn. Ring is a
-  new circular arc meter; Percent-only drops the meter graphic entirely for
-  a denser, text-only row.
-- Analytics pane split into "Today" and "Trend" sections:
-  - Today's hourly chart now draws three separate colored lines
-    (Claude/Codex/Antigravity) with a legend instead of one blended line —
-    tokens and prompt-counts aren't the same unit, so summing them into one
-    number was never that meaningful.
-  - New 7-day / 30-day trend chart (stacked daily cost bars per provider,
-    with a segmented range switcher) — Analytics previously only knew
-    about today.
-  - Busiest weekday note in the 30-day view.
+- **Limit styles:** Choose Bar, Ring, or Percent-only display.
+- **Analytics sections:** Added hourly provider lines, 7-day/30-day cost trends, and busiest weekday.
 
 ## [0.6.1] - 2026-07-25
 
 ### Added
 
-- Per-provider "show in menu bar" toggle in Settings › Providers (the eye
-  icon on each row) — independent of drag order, and independent of the
-  popover, so a provider can stay reachable via the popover's sidebar while
-  being hidden from the compact status-bar title.
-- Changelog tab in Settings, reading this file bundled into the app.
+- **Provider visibility:** Show or hide each provider in the menu bar independently from the popover.
+- **Changelog tab:** Read this file inside Settings.
 
 ### Fixed
 
-- Popover was sizing itself to the full (unclipped) height of its ScrollView
-  content instead of the intended fixed 480pt — NSHostingController's
-  automatic content-size tracking doesn't play well with a ScrollView inside
-  a fixed frame. Popover size is now pinned explicitly.
-- Footer buttons (Refresh Now, Check for Updates, Settings, Quit) were
-  `.borderless` — flat text with no visible button chrome. Now `.bordered`.
-- `make-app.sh` had a hardcoded local-build version fallback (`0.4.0`) that
-  never got updated across several later releases, so any ad-hoc local
-  build reported a stale version regardless of what was actually built.
-  It now defaults to the latest git tag instead.
+- **Popover size:** The window stays at its intended fixed height.
+- **Footer buttons:** Actions now use visible macOS button chrome.
+- **Build version:** Local builds default to the latest git tag.
 
 ## [0.6.0] - 2026-07-24
 
 ### Changed
 
-- Dropdown redesigned from a single scrolling NSMenu into a popover with a
-  side tab bar — Claude Code / Codex / Antigravity / Analytics, one click
-  switches panes instead of scrolling past everything. A persistent footer
-  (refresh countdown, Refresh Now, Check for Updates, Settings, Quit) stays
-  visible regardless of which tab is selected. Refresh Now no longer closes
-  the window — data updates live in place.
-- All existing rows (limits, today's tokens, cache hit rate, per-model
-  breakdown, skills used, avg/session, 7-day/30-day cost, hourly chart)
-  carried over 1:1 into the new panes, still gated by the same Settings
-  toggles.
+- **Popover navigation:** Replaced the scrolling menu with side tabs and a persistent footer.
+- **Existing details:** Limits, tokens, costs, sessions, skills, and charts remain available in the new panes.
 
 ## [0.5.2] - 2026-07-24
 
 ### Added
 
-- "Skills used today" — tallies Claude Code `Skill` tool invocations
-  (e.g. `/commit`, `/graphify`) from today's transcripts, shown in the
-  Claude Code dropdown section and toggleable in Settings › General.
-  Reuses the existing token-usage dedup logic so re-streamed log entries
-  don't double-count.
+- **Skills used today:** Count Claude Code Skill calls and show the most-used skills in the provider pane.
 
 ## [0.5.1] - 2026-07-24
 
 ### Added
 
-- Custom app icon (`Resources/AppIcon.icns`) — purple gradient squircle with
-  a usage-meter capsule and a sparkle accent. Previously the app had no icon
-  at all and fell back to the generic system placeholder.
+- **App icon:** Added a custom purple usage-meter icon.
 
 ## [0.5.0] - 2026-07-24
 
 ### Added
 
-- Add a daily Analytics section with an hourly line chart and peak activity
-  hour.
-- Show Antigravity quota remaining for the 5-hour and weekly windows when
-  quota data is available.
-- Animate the Antigravity logo in the menu bar while an AI task is running.
-- Fall back to Antigravity prompt counts when quota data is unavailable.
-- Reorderable provider order: drag Claude/Codex/Antigravity into any order in
-  Settings › Providers — the same order now drives both the status-bar
-  segments and the dropdown sections.
-- More dropdown data: per-model cost/token breakdown (Claude), cache hit
-  rate, average cost/tokens per session, and 7-day/30-day cumulative cost per
-  provider.
-- Live USD→THB exchange rate, auto-fetched periodically from
-  api.frankfurter.app (Settings › Cost), with a manual override and a
-  Refresh Now button.
-- Settings window redesigned as four top tabs (General / Providers / Cost /
-  Log) instead of one long scrolling form; the log viewer now has its own
-  page.
+- **Analytics:** Added hourly activity, peak hour, and daily cost views.
+- **Antigravity quota:** Show 5-hour and weekly quota when available.
+- **Antigravity activity:** Animate its icon while a task runs and fall back to prompt counts without quota data.
+- **Provider order:** Reorder providers once for both the menu bar and popover.
+- **Usage details:** Added model, cache, session, and period-cost breakdowns.
+- **Currency conversion:** Added live USD-to-THB rates with manual override.
+- **Settings tabs:** Split General, Providers, Cost, and Log into separate tabs.
 
 ### Fixed
 
-- Antigravity 5-hour/weekly rows no longer silently disappear right around a
-  window's rollover — they now show a "window reset" note like Claude/Codex
-  instead of vanishing even though today's usage exists.
-- Claude limit rows no longer show a blank gap before the first fetch
-  resolves; a "Fetching limits…" note shows instead.
-- The 5-hour/Weekly toggle in Settings now actually hides/shows the
-  corresponding row in the dropdown, not just the menu-bar title.
+- **Window rollover:** Antigravity rows explain a reset instead of disappearing.
+- **Claude loading:** Show a fetching state before the first limits read.
+- **Window toggles:** Settings now controls which rows appear in the popover.
 
 ## [0.4.0] - 2026-07-15
 
 ### Added
 
-- Antigravity local prompt usage tracking and cost analytics:
-  - Detects Antigravity CLI history files under `~/.gemini/antigravity-cli`.
-  - Tracks today's prompts and session counts.
-  - Computes estimated cost using Gemini 3.5 Flash list prices (assuming 1.5K input / 800 output tokens per prompt).
-  - Displays Gemini brand icon/color in the status bar and dropdown.
+- **Antigravity tracking:** Detect local prompts, sessions, estimated cost, and Gemini branding.
 
 ## [0.3.1] - 2026-07-15
 
 ### Fixed
 
-- Point the Sparkle update feed and repository links at the renamed repo
-  (`AI_Usage` → `ai-usage-bar`); the old appcast URL now 404s, so builds
-  carrying it cannot auto-update. **v0.3.0 shipped with the dead feed URL —
-  install this version instead.**
-- Recheck an expired login every minute (instead of every 5) so the display
-  recovers almost as soon as the Claude CLI writes a fresh token.
+- **Update feed:** Pointed releases and repository links at the renamed repository.
+- **Login recovery:** Recheck expired Claude login state every minute.
 
 ## [0.3.0] - 2026-07-15
 
 ### Added
 
-- Show estimated cost of today's tokens per provider, priced at API list
-  prices per model and shown in both THB and USD (exchange rate configurable
-  in Settings).
-- Diagnostics log (API calls, keychain reads, errors) with a viewer in
-  Settings; stored at `~/Library/Logs/AIUsageBar/`.
-- Live countdown ring in the dropdown showing seconds until the next refresh.
-- Show the app version in the dropdown menu.
-- Settings toggles for which Claude windows (5-hour / weekly) drive the
-  menu-bar percentage.
-- Surface usage-API failures in the dropdown with the cause (HTTP status /
-  error) and the age of the cached data still on display.
-- Persist the last good Claude limits across relaunches, so the dropdown shows
-  cached data (with its age) instead of nothing while the first fetch runs or
-  is rate limited.
+- **Cost estimates:** Show today's provider cost in USD and THB.
+- **Diagnostics log:** Record app events and view them in Settings.
+- **Refresh countdown:** Show seconds until the next refresh.
+- **Version display:** Show the app version in the popover.
+- **Window settings:** Choose which Claude windows drive the menu-bar percentage.
+- **API errors:** Show failure causes and cached-data age.
 
 ### Changed
 
-- Wider dropdown (300 → 380) with token stats paired two per row, roughly
-  halving the menu height.
-- Wider Settings window with the menu-bar options grouped on one row.
-- Honor the usage API's `Retry-After` on 429: nothing refetches before the
-  server-given time — not the timer, not ⌘R, not a relaunch (the penalty
-  window persists to disk) — and the dropdown shows a retry countdown.
+- **Popover width:** Pair token stats in rows to reduce height.
+- **Settings layout:** Group menu-bar options on one row.
+- **Retry handling:** Respect the server's Retry-After value before refetching.
 
 ### Fixed
 
-- Parse fractional-second `resets_at` timestamps so Claude "resets in" no
-  longer shows "—".
-- Cache the Claude access token in memory: the keychain is read once per
-  launch (and again only after a 401) instead of on every limits poll,
-  cutting password prompts dramatically.
-- Never start a second limits fetch while one is blocked on the keychain
-  dialog — previously each 60s tick stacked another password prompt.
-- Periodic refresh keeps firing while the dropdown is open (timer moved to
-  `.common` run-loop mode).
-- `make-app.sh` accepts `CODESIGN_IDENTITY` (and auto-detects a local
-  "AIUsageBar Signing" certificate) so builds signed with a stable identity
-  keep the keychain "Always Allow" grant across updates.
+- **Reset timestamps:** Parse fractional-second reset values.
+- **Keychain reads:** Cache the Claude access token between requests.
+- **Fetch coordination:** Prevent duplicate keychain prompts and overlapping fetches.
+- **Refresh timer:** Continue updating while the popover is open.
+- **Signing:** Support a stable local signing identity for updates.
 
 ## [0.2.1] - 2026-07-15
 
 ### Fixed
 
-- Fix the bundled Sparkle framework path so the released app launches normally.
+- **Sparkle framework:** Corrected the bundled path so the app launches.
 
 ## [0.2.0] - 2026-07-15
 
 ### Added
 
-- Add Sparkle automatic updates using signed releases and a GitHub Pages appcast.
-- Add **Check for Updates…** to the menu-bar menu.
+- **Automatic updates:** Added signed Sparkle updates and a manual update check.
 
-### Known issue
+### Notes
 
-- This release cannot launch because the bundled Sparkle framework path is
-  missing. Install v0.2.1 instead.
+- **Known issue:** This release cannot launch; install 0.2.1 instead.
 
 ## [0.1.0] - 2026-07-14
 
 ### Added
 
-- First preview release of AI Usage Bar.
-- Show Claude Code and Codex token usage and rate-limit readings in the macOS
-  menu bar.
+- **First release:** Show Claude Code and Codex usage and rate limits in the macOS menu bar.

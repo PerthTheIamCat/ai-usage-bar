@@ -7,6 +7,11 @@ enum UsageReader {
         .appendingPathComponent(".codex/sessions")
     static let antigravityDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".gemini/antigravity-cli")
+    /// The desktop IDE stores conversations separately from the CLI. It does
+    /// not expose the CLI's quota payload, but its presence still proves the
+    /// provider is installed and lets the popover explain the missing quota.
+    static let antigravityIDEDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".gemini/antigravity")
 
     private static let codexLogLock = NSLock()
     private static var lastCodexLogSignature: String?
@@ -56,7 +61,10 @@ enum UsageReader {
                 signature: "missing")
         }
         progress?("Reading Antigravity logs…")
-        if fm.fileExists(atPath: antigravityDir.path) {
+        if fm.fileExists(atPath: antigravityDir.path)
+            || fm.fileExists(atPath: antigravityIDEDir.path)
+            || FileManager.default.fileExists(atPath: AntigravityLimitsReader.statusLineSnapshotURL.path)
+        {
             snap.antigravity = readAntigravityToday()
         }
         progress?("Reading activity timeline…")
@@ -1182,6 +1190,10 @@ enum UsageReader {
             }
             parts.append(filesFingerprint(filesModified(under: antigravityDir.appendingPathComponent("log"), ext: "log", sinceDaysAgo: 2)))
         }
+        if fm.fileExists(atPath: antigravityIDEDir.path) {
+            parts.append(filesFingerprint(filesModified(under: antigravityIDEDir.appendingPathComponent("conversations"), ext: "db", sinceDaysAgo: 8)))
+        }
+        parts.append(fileStamp(AntigravityLimitsReader.statusLineSnapshotURL))
         return parts.joined(separator: "#")
     }
 
@@ -1216,10 +1228,13 @@ enum UsageReader {
         var usage = AntigravityUsage()
         let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
         let limits = readAntigravityLimits()
-        usage.fiveHour = limits.short?.window
-        usage.weekly = limits.long?.window
-        usage.asOf = [limits.short?.asOf, limits.long?.asOf].compactMap { $0 }.max()
+        let statusLine = AntigravityLimitsReader.fetch()
+        usage.fiveHour = statusLine?.fiveHour ?? limits.short?.window
+        usage.weekly = statusLine?.weekly ?? limits.long?.window
+        usage.asOf = [statusLine?.observedAt, limits.short?.asOf, limits.long?.asOf]
+            .compactMap { $0 }.max()
         guard FileManager.default.fileExists(atPath: historyFile.path) else {
+            readAntigravityIDEActivity(into: &usage)
             usage.isWorking = antigravityIsWorking()
             return usage
         }
@@ -1237,8 +1252,33 @@ enum UsageReader {
             }
         }
         usage.sessionCount = uniqueSessions.count
+        if usage.sessionCount == 0 {
+            readAntigravityIDEActivity(into: &usage)
+        }
         usage.isWorking = antigravityIsWorking()
         return usage
+    }
+
+    /// IDE conversations are SQLite databases rather than the CLI's JSONL
+    /// history. Count those databases as sessions so an IDE user is detected
+    /// and gets a useful provider pane. Quota remains nil until the IDE
+    /// exposes a stable local quota payload.
+    private static func readAntigravityIDEActivity(into usage: inout AntigravityUsage) {
+        let conversations = antigravityIDEDir.appendingPathComponent("conversations")
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: conversations,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            options: .skipsHiddenFiles)
+        else { return }
+        let databases = files.filter { url in
+            guard url.pathExtension == "db",
+                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+            else { return false }
+            return values.isRegularFile == true
+        }
+        usage.sessionCount = databases.count
+        usage.isIDE = !databases.isEmpty
+        usage.asOf = databases.map { modifiedDate($0) }.max() ?? usage.asOf
     }
 
     /// Prompt count over the last `daysBack` local days, for the 7-/30-day

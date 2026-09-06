@@ -37,8 +37,9 @@ popover on **Overview**:
 Tap a provider's card for the full detail pane: token breakdown, today's
 sessions (skills and tools used, with a per-item cost estimate), model
 breakdown, and 7-/30-day cost trends — all one click away rather than the
-default view. No setup screen for the app itself; it detects the CLIs from
-`~/.claude` and `~/.codex` on its own.
+default view. No setup screen for the app itself; it detects local provider
+data from `~/.claude`, `~/.codex`, and Antigravity's CLI/IDE directories on its
+own.
 
 ## Install and use
 
@@ -62,6 +63,14 @@ default view. No setup screen for the app itself; it detects the CLIs from
      after placing the app in `/Applications` (set `AI_USAGE_BAR_BIN` first
      for a custom app location) — it only installs the bridge script and
      prints the snippet to add yourself.
+   - **Antigravity CLI** — the Overview pane offers a **Set Up CLI Status
+     Line** action when no quota reading exists. It adds a command to
+     `~/.gemini/antigravity-cli/settings.json`, preserves the built-in line,
+     and backs up an existing settings file before changing it. Use
+     Antigravity once after restarting the CLI so the app receives its quota.
+     **Antigravity IDE** conversations are detected from their local database
+     automatically. The IDE does not persist the CLI status-line quota payload,
+     so its pane shows activity while quota rows remain unavailable.
 5. Click the menu-bar icon whenever you want the detailed breakdown. Press
    `⌘R` or choose **Refresh Now** to reread local snapshots.
 6. From version 0.2.0 onward, the app checks for updates automatically. Use
@@ -76,7 +85,7 @@ To start it automatically: **System Settings → General → Login Items → Add
 | --- | --- | --- |
 | Claude | Local Claude Code session logs | Claude Code's local `statusLine` snapshot, or the Claude Desktop app's own local usage file — whichever is fresher |
 | Codex | Local Codex session logs | Latest `rate_limits` entry written by Codex |
-| Antigravity | Local activity data | Local quota snapshot |
+| Antigravity | Local activity data from CLI history or IDE conversation databases | Antigravity CLI status-line snapshot (with local cache fallback) |
 
 The app never reads, refreshes, rotates, or writes Claude credentials. Claude
 limit snapshots contain only the `rate_limits` fields supplied to the local
@@ -84,10 +93,12 @@ status-line command (or the used-percentage fields from the Desktop app's own
 file); prompt and transcript content is never stored. Codex readings are
 local and are only as fresh as the latest Codex session that wrote them.
 
-Both Claude sources are watched directly, so a new reading is picked up
-within seconds rather than waiting for the next refresh. If neither source
-has supplied one for 30 minutes, AI Usage Bar marks it stale and keeps the
-last known value; it never falls back to an HTTP request. The Desktop app
+Claude's status-line source and Antigravity's status-line snapshot are watched
+directly, so a new reading is picked up within seconds rather than waiting for
+the next refresh. If neither Claude source has supplied a reading for 30
+minutes, AI Usage Bar marks Claude's value stale and keeps the last known
+value; it never falls back to an HTTP request. The Antigravity pane shows the
+observation age for its cached reading. The Desktop app
 samples every few minutes rather than continuously — between its samples,
 the 5-hour figure is projected forward from Claude Code tokens logged since
 the last sample (shown with a leading `~`), calibrated from your own recent

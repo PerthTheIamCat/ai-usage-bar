@@ -84,16 +84,19 @@ struct CodexUsage {
 
 struct AntigravityUsage {
     var totalPrompts = 0
+    /// CLI conversation count, or IDE conversation database count when the
+    /// desktop app is the only Antigravity source present.
     var sessionCount = 0
     var fiveHour: LimitWindow?
     var weekly: LimitWindow?
-    /// Modification time of whichever quota cache file the limits came from.
-    /// Unlike Claude and Codex, Antigravity's quota files carry no reading
-    /// timestamp of their own, so this is the only freshness signal
-    /// available — without it a quota from hours ago (Antigravity closed,
-    /// no fresher file written since) looks identical to a live one.
+    /// Observation time of the status-line snapshot, or modification time of
+    /// a legacy local quota cache when the bridge has not supplied a reading.
     var asOf: Date?
     var isWorking = false
+    /// True when the desktop IDE's conversation store supplied the activity.
+    /// The IDE and CLI use different local stores and only the CLI supports
+    /// the documented status-line quota payload.
+    var isIDE = false
 }
 
 /// Today's activity by hour, split per provider so the chart can show which

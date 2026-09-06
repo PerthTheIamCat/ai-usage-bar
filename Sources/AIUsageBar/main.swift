@@ -677,6 +677,12 @@ if CommandLine.arguments.contains("--claude-statusline") {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--antigravity-statusline") {
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    print(AntigravityLimitsReader.captureStatusLineInput(input))
+    exit(0)
+}
+
 func dumpSessionActivities(_ provider: String, _ sessions: [SessionActivity]) {
     guard !sessions.isEmpty else { return }
     print("\(provider) sessions today:")
@@ -735,6 +741,16 @@ if CommandLine.arguments.contains("--dump") {
             return "\(n)=\(Int(x.remainingPercent))% left (resets \(humanReset(x.resetsAt)))"
         }
         print("Codex limits (as of \(humanAgo(l.asOf))): \(w("weekly", l.secondary))")
+    }
+    if let g = snap.antigravity {
+        func w(_ n: String, _ x: LimitWindow?) -> String {
+            guard let x = x else { return "\(n)=n/a" }
+            return "\(n)=\(Int(x.remainingPercent))% left (resets \(humanReset(x.resetsAt)))"
+        }
+        let source = g.isIDE ? "IDE" : "CLI"
+        print("Antigravity: source=\(source) prompts=\(g.totalPrompts) sessions=\(g.sessionCount) \(w("5h", g.fiveHour))  \(w("weekly", g.weekly))")
+    } else {
+        print("Antigravity: not detected")
     }
     exit(0)
 }
