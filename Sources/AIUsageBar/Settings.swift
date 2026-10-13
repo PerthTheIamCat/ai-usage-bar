@@ -40,6 +40,11 @@ enum LimitStyle: String, CaseIterable, Identifiable {
     case barAndPercent
     case ringAndPercent
     case dotAndPercent
+    case blocks
+    case blocksAndPercent
+    case battery
+    case batteryAndPercent
+    case pill
 
     var id: String { rawValue }
 
@@ -51,6 +56,11 @@ enum LimitStyle: String, CaseIterable, Identifiable {
         case .barAndPercent: return "Bar + percent"
         case .ringAndPercent: return "Ring + percent"
         case .dotAndPercent: return "Dot + percent"
+        case .blocks: return "Blocks"
+        case .blocksAndPercent: return "Blocks + percent"
+        case .battery: return "Battery"
+        case .batteryAndPercent: return "Battery + percent"
+        case .pill: return "Pill"
         }
     }
 
@@ -58,8 +68,9 @@ enum LimitStyle: String, CaseIterable, Identifiable {
 
     var showsPercent: Bool {
         switch self {
-        case .percentOnly, .barAndPercent, .ringAndPercent, .dotAndPercent: return true
-        case .bar, .ring: return false
+        case .percentOnly, .barAndPercent, .ringAndPercent, .dotAndPercent,
+             .blocksAndPercent, .batteryAndPercent: return true
+        case .bar, .ring, .blocks, .battery, .pill: return false
         }
     }
 }
@@ -190,6 +201,22 @@ final class AppSettings: ObservableObject {
         static let showSessionWorkspace = "showSessionWorkspace"
         static let sessionAlertEnabled = "sessionAlertEnabled"
         static let sessionAlertThreshold = "sessionAlertThreshold"
+        static let touchBarEnabled = "touchBarEnabled"
+        static let forceTouchBarSupport = "forceTouchBarSupport"
+    }
+
+    @Published var touchBarEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(touchBarEnabled, forKey: Keys.touchBarEnabled)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var forceTouchBarSupport: Bool {
+        didSet {
+            UserDefaults.standard.set(forceTouchBarSupport, forKey: Keys.forceTouchBarSupport)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
     }
 
     @Published var displayMode: UsageDisplayMode {
@@ -619,5 +646,7 @@ final class AppSettings: ObservableObject {
         sessionAlertEnabled = d.object(forKey: Keys.sessionAlertEnabled) as? Bool ?? false
         let storedSessionThreshold = d.double(forKey: Keys.sessionAlertThreshold)
         sessionAlertThreshold = storedSessionThreshold > 0 ? storedSessionThreshold : 5_000_000
+        touchBarEnabled = d.object(forKey: Keys.touchBarEnabled) as? Bool ?? false
+        forceTouchBarSupport = d.object(forKey: Keys.forceTouchBarSupport) as? Bool ?? false
     }
 }

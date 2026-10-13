@@ -19,7 +19,7 @@ struct SettingsView: View {
             ChangelogTab()
                 .tabItem { Label("Changelog", systemImage: "clock.arrow.circlepath") }
         }
-        .frame(width: 620, height: 650)
+        .frame(width: 620, height: 750)
     }
 }
 
@@ -109,6 +109,37 @@ private struct GeneralTab: View {
                 Text("Usage display")
             } footer: {
                 Text("Applies to every provider. A single row grows to use the available menu-bar height. The popover always shows the full bar meter.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                HStack {
+                    Text("Hardware status")
+                    Spacer()
+                    if TouchBarHardware.hasPhysicalTouchBar {
+                        Label("Touch Bar detected", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        Label("Not detected (\(TouchBarHardware.modelDisplayName))", systemImage: "xmark.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Toggle("Show in Touch Bar (Control Strip)", isOn: $settings.touchBarEnabled)
+                    .disabled(!TouchBarHardware.hasPhysicalTouchBar && !settings.forceTouchBarSupport)
+
+                if !TouchBarHardware.hasPhysicalTouchBar {
+                    Toggle("Enable anyway (for Touch Bar simulator or virtual tools)", isOn: $settings.forceTouchBarSupport)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Touch Bar")
+            } footer: {
+                Text(TouchBarHardware.hasPhysicalTouchBar
+                     ? "Displays live AI provider meters in the Touch Bar Control Strip next to system controls."
+                     : "This Mac (\(TouchBarHardware.modelDisplayName)) does not have a physical Touch Bar. You can enable it anyway if using Xcode Touch Bar Simulator or third-party virtual Touch Bar tools.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -256,6 +287,11 @@ private struct MenuBarStyleOption: View {
         case .barAndPercent: return "Meters + values"
         case .ringAndPercent: return "Rings + values"
         case .dotAndPercent: return "Dots + values"
+        case .blocks: return "Segmented level blocks"
+        case .blocksAndPercent: return "Blocks + values"
+        case .battery: return "Battery gauge"
+        case .batteryAndPercent: return "Battery + values"
+        case .pill: return "Inline pill badge"
         }
     }
 
@@ -783,7 +819,7 @@ final class SettingsWindowController {
             let hosting = NSHostingController(rootView: SettingsView())
             let w = NSWindow(contentViewController: hosting)
             w.title = "AI Usage Bar Settings"
-            w.styleMask = [.titled, .closable]
+            w.styleMask = [.titled, .closable, .resizable]
             w.isReleasedWhenClosed = false
             w.center()
             window = w

@@ -1,7 +1,6 @@
 import Foundation
 
-/// A single usage window (5-hour session or 7-day weekly).
-struct LimitWindow {
+struct LimitWindow: Equatable {
     var usedPercent: Double   // 0-100
     var resetsAt: Date?
     /// True when `usedPercent` was projected forward from the last real
@@ -9,8 +8,18 @@ struct LimitWindow {
     /// estimate is never mistaken for a measurement, and deliberately not
     /// used to raise limit notifications.
     var isEstimated = false
+    var resetDescription: String? = nil
 
     var remainingPercent: Double { max(0, 100 - usedPercent) }
+}
+
+/// A model group in Antigravity (e.g. "Gemini Models", "Claude and GPT models").
+struct AntigravityModelGroup: Identifiable, Equatable {
+    var id: String { name }
+    var name: String
+    var description: String?
+    var weekly: LimitWindow?
+    var fiveHour: LimitWindow?
 }
 
 struct ClaudeLimits {

@@ -13,7 +13,7 @@ final class MenuBarMeterTests: XCTestCase {
     }
 
     func testEitherWindowChangesTheRenderedMeter() throws {
-        for style in [LimitStyle.bar, .ring, .percentOnly, .barAndPercent, .ringAndPercent] {
+        for style in LimitStyle.allCases {
             let baseline = try render(style, fiveHour: 80, weekly: 60)
             XCTAssertNotEqual(baseline, try render(style, fiveHour: 40, weekly: 60), style.rawValue)
             XCTAssertNotEqual(baseline, try render(style, fiveHour: 80, weekly: 30), style.rawValue)

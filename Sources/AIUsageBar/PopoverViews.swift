@@ -52,12 +52,21 @@ private struct RefreshCountdownRepresentable: NSViewRepresentable {
 
 struct CaptionText: View {
     let title: String
+    var info: String? = nil
     var body: some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4)
+        HStack(spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            if let info {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .help(info)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
     }
 }
 
@@ -214,6 +223,10 @@ struct LimitRow: View {
                 Text("resets in \(humanReset(reset))")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
+            } else if let desc = window.resetDescription, !desc.isEmpty {
+                Text(desc)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
             } else if window.isEstimated {
                 Text("estimated from tokens since the last reading")
                     .font(.system(size: 10.5))
@@ -229,7 +242,8 @@ struct LimitRow: View {
 @ViewBuilder
 func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil) -> some View {
     if let r = w.resetsAt, r <= Date() {
-        NoteText(text: "\(name): window reset — use Claude Code or the Desktop app for a fresh reading")
+        let appName = (provider == .antigravity) ? "Antigravity" : ((provider == .codex) ? "Codex" : "Claude Code")
+        NoteText(text: "\(name): window reset — use \(appName) for a fresh reading")
     } else {
         LimitRow(name: name, window: w, provider: provider, windowKind: windowKind)
     }
@@ -287,8 +301,7 @@ struct AntigravityStatusLineSetupPrompt: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if isIDE {
-                NoteText(text: "Antigravity IDE detected. Activity is read from its local conversations.")
-                NoteText(text: "The IDE does not persist quota data in the CLI status-line format yet.")
+                NoteText(text: "Antigravity Desktop app detected. Live quota is queried automatically via its language server when a conversation is active.")
             } else {
                 switch setupState {
                 case .configured:
@@ -551,11 +564,12 @@ struct OverviewPane: View {
                     todayLine: "\(formatTokens(x.totalTokens)) tokens · \(formatUSD(Pricing.codexCostUSD(x))) today")
             case .antigravity:
                 guard let g = snap.antigravity else { return nil }
+                let hasQuota = g.fiveHour != nil || g.weekly != nil || !g.groups.isEmpty
                 return Card(
                     kind: kind, title: "Antigravity",
                     fiveHour: shown(.fiveHour, for: kind, g.fiveHour),
                     weekly: shown(.weekly, for: kind, g.weekly),
-                    problem: (g.fiveHour == nil && g.weekly == nil) ? (g.isIDE ? "IDE activity detected · quota unavailable" : "No quota data yet · tap for CLI setup") : nil,
+                    problem: !hasQuota ? (g.isIDE ? "Desktop app detected · waiting for quota" : "No quota data yet · tap for CLI setup") : nil,
                     todayLine: "\(g.totalPrompts) prompts · \(formatUSD(Pricing.antigravityCostUSD(g))) today")
             }
         }
@@ -871,18 +885,34 @@ struct AntigravityPane: View {
     @ViewBuilder
     private func antigravityLimitsSection(_ g: AntigravityUsage) -> some View {
         let settings = AppSettings.shared
-        let fiveHour = settings.isLimitWindowShown(.fiveHour, for: .antigravity) ? g.fiveHour : nil
-        let weekly = settings.isLimitWindowShown(.weekly, for: .antigravity) ? g.weekly : nil
-        if fiveHour == nil && weekly == nil {
+        let hasAnyLimit = g.fiveHour != nil || g.weekly != nil || !g.groups.isEmpty
+
+        if !hasAnyLimit {
             AntigravityStatusLineSetupPrompt(isIDE: g.isIDE)
         } else {
-            // Keep the observation age visible so a cached Antigravity
-            // reading from an hour ago never looks identical to a live one.
             if let asOf = g.asOf {
                 CaptionText(title: "Limits · as of \(humanAgo(asOf))")
             }
-            if let w = fiveHour { limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour) }
-            if let w = weekly { limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly) }
+            if !g.groups.isEmpty {
+                ForEach(g.groups) { group in
+                    CaptionText(title: group.name, info: group.description)
+                    if settings.isLimitWindowShown(.fiveHour, for: .antigravity), let w = group.fiveHour {
+                        limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour)
+                    }
+                    if settings.isLimitWindowShown(.weekly, for: .antigravity), let w = group.weekly {
+                        limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly)
+                    }
+                    if !settings.isLimitWindowShown(.fiveHour, for: .antigravity)
+                        && !settings.isLimitWindowShown(.weekly, for: .antigravity) {
+                        NoteText(text: "Both windows hidden — enable in Settings › Providers")
+                    }
+                }
+            } else {
+                let fiveHour = settings.isLimitWindowShown(.fiveHour, for: .antigravity) ? g.fiveHour : nil
+                let weekly = settings.isLimitWindowShown(.weekly, for: .antigravity) ? g.weekly : nil
+                if let w = fiveHour { limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour) }
+                if let w = weekly { limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly) }
+            }
         }
     }
 }
@@ -1203,7 +1233,11 @@ struct PopoverContentView: View {
         self.onSaveCSV = onSaveCSV
         self.onSettings = onSettings
         self.onQuit = onQuit
-        _selection = State(initialValue: .overview)
+        if CommandLine.arguments.contains("--antigravity") {
+            _selection = State(initialValue: .provider(.antigravity))
+        } else {
+            _selection = State(initialValue: .overview)
+        }
     }
 
     private var tabs: [PopoverPane] {

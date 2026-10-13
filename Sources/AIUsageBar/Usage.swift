@@ -89,6 +89,7 @@ struct AntigravityUsage {
     var sessionCount = 0
     var fiveHour: LimitWindow?
     var weekly: LimitWindow?
+    var groups: [AntigravityModelGroup] = []
     /// Observation time of the status-line snapshot, or modification time of
     /// a legacy local quota cache when the bridge has not supplied a reading.
     var asOf: Date?

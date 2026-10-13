@@ -125,11 +125,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // loop at 12.5 Hz forever, which is real (if small) idle cost added
         // up over a full day for a feature most users see rarely.
 
+        TouchBarManager.shared.onItemTapped = { [weak self] in
+            self?.statusItemClicked()
+        }
+        TouchBarManager.shared.start()
+
         NotificationCenter.default.addObserver(
             forName: .usageSettingsChanged, object: nil, queue: .main
         ) { [weak self] _ in
+            TouchBarManager.shared.syncWithSettings()
             guard let self, let snap = self.lastSnapshot else { return }
             self.apply(snap)
+        }
+
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.aiusagebar.togglePopover"), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.statusItemClicked()
+        }
+
+        if CommandLine.arguments.contains("--settings") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                SettingsWindowController.shared.show()
+            }
+        }
+        if CommandLine.arguments.contains("--popover") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.statusItemClicked()
+            }
         }
     }
 
@@ -248,7 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         maybeRefreshExchangeRate()
         nextRefreshAt = Date().addingTimeInterval(refreshInterval)
         let previousSourcesFingerprint = lastSourcesFingerprint
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             // Most minutes nothing has written to any log we read — the Mac is
             // idle, or the user isn't using a CLI right now. Comparing a
             // stat-only signature first turns those ticks into a few dozen
@@ -307,7 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let startedAt = Date()
         setLoadingStatus("Calculating 7/30-day costs…")
 
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             // One 30-day scan, not two: the period costs are summed from the
             // same daily buckets the trend is built from, so computing them
             // separately meant reading every log of the last month twice.
@@ -467,6 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordBurnRateSamples(snap)
         updateAntigravityAnimation(isWorking: snap.antigravity?.isWorking == true)
         UsageNotifier.shared.check(snap)
+        TouchBarManager.shared.update(snapshot: snap)
     }
 
     /// Starts or stops the icon-spin timer to match Antigravity's actual
@@ -749,6 +773,12 @@ if CommandLine.arguments.contains("--dump") {
         }
         let source = g.isIDE ? "IDE" : "CLI"
         print("Antigravity: source=\(source) prompts=\(g.totalPrompts) sessions=\(g.sessionCount) \(w("5h", g.fiveHour))  \(w("weekly", g.weekly))")
+        for grp in g.groups {
+            print("  Group: \(grp.name) · \(w("5h", grp.fiveHour)) · \(w("weekly", grp.weekly))")
+            if let desc = grp.weekly?.resetDescription ?? grp.fiveHour?.resetDescription {
+                print("    Notice: \(desc)")
+            }
+        }
     } else {
         print("Antigravity: not detected")
     }
