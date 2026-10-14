@@ -6,13 +6,16 @@ import AppKit
 
 private struct LimitBarRepresentable: NSViewRepresentable {
     let remainingPercent: Double
+    var warnBelow: Double?
     func makeNSView(context: Context) -> LimitBarView {
         let v = LimitBarView()
         v.remainingPercent = remainingPercent
+        v.warnBelow = warnBelow
         return v
     }
     func updateNSView(_ nsView: LimitBarView, context: Context) {
         nsView.remainingPercent = remainingPercent
+        nsView.warnBelow = warnBelow
     }
 }
 
@@ -191,6 +194,11 @@ struct LimitRow: View {
     var provider: ProviderKind?
     var windowKind: LimitWindowKind?
 
+    private var warnBelow: Double? {
+        guard let provider, let windowKind else { return nil }
+        return AppSettings.shared.warnBelow(provider, windowKind)
+    }
+
     private var forecast: BurnRateTracker.Forecast? {
         guard let provider, let windowKind else { return nil }
         return BurnRateTracker.forecast(provider, windowKind, resetsAt: window.resetsAt)
@@ -204,9 +212,9 @@ struct LimitRow: View {
                 Spacer()
                 Text((window.isEstimated ? "~" : "") + AppSettings.shared.displayMode.rowText(remaining: remaining))
                     .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Color(nsColor: limitColor(remaining)))
+                    .foregroundStyle(Color(nsColor: limitColor(remaining, warnBelow: warnBelow)))
             }
-            LimitBarRepresentable(remainingPercent: remaining)
+            LimitBarRepresentable(remainingPercent: remaining, warnBelow: warnBelow)
                 .frame(height: 5)
             // At the current pace this window will hit 100% before it resets
             // — the single most-requested thing across every comparable
@@ -341,6 +349,7 @@ struct AntigravityStatusLineSetupPrompt: View {
 private struct MiniLimitRow: View {
     let label: String
     let window: LimitWindow
+    var warnBelow: Double?
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
@@ -349,7 +358,7 @@ private struct MiniLimitRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .frame(width: 46, alignment: .leading)
-            LimitBarRepresentable(remainingPercent: window.remainingPercent)
+            LimitBarRepresentable(remainingPercent: window.remainingPercent, warnBelow: warnBelow)
                 .frame(height: 5)
             // The meter already fills according to the display mode, so the
             // number has to follow it — printing "left" next to a bar drawn
@@ -357,7 +366,7 @@ private struct MiniLimitRow: View {
             // menu bar.
             Text((window.isEstimated ? "~" : "") + settings.displayMode.shortText(remaining: window.remainingPercent))
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Color(nsColor: limitColor(window.remainingPercent)))
+                .foregroundStyle(Color(nsColor: limitColor(window.remainingPercent, warnBelow: warnBelow)))
                 .frame(width: 40, alignment: .trailing)
         }
     }
@@ -413,8 +422,8 @@ private struct ProviderSummaryCard: View {
                     NoteText(text: "No limit data yet")
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
-                        if let w = fiveHour { MiniLimitRow(label: "5-hour", window: w) }
-                        if let w = weekly { MiniLimitRow(label: "Weekly", window: w) }
+                        if let w = fiveHour { MiniLimitRow(label: "5-hour", window: w, warnBelow: AppSettings.shared.warnBelow(kind, .fiveHour)) }
+                        if let w = weekly { MiniLimitRow(label: "Weekly", window: w, warnBelow: AppSettings.shared.warnBelow(kind, .weekly)) }
                     }
                     if let forecast = fiveHourForecast, forecast.willDepleteBeforeReset {
                         Text("⚠︎ 5-hour hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened))")
@@ -448,6 +457,7 @@ private struct HeroRemainingCard: View {
     let providerTitle: String
     let windowLabel: String
     let window: LimitWindow
+    var warnBelow: Double?
     @ObservedObject private var settings = AppSettings.shared
 
     /// The window shown is the same either way — it is the tightest one. Only
@@ -464,7 +474,7 @@ private struct HeroRemainingCard: View {
                     .stroke(Color.secondary.opacity(0.15), lineWidth: 7)
                 Circle()
                     .trim(from: 0, to: max(0.003, shownFraction))
-                    .stroke(Color(nsColor: limitColor(window.remainingPercent)),
+                    .stroke(Color(nsColor: limitColor(window.remainingPercent, warnBelow: warnBelow)),
                             style: StrokeStyle(lineWidth: 7, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Text(settings.displayMode.shortText(remaining: window.remainingPercent))
@@ -595,12 +605,17 @@ struct OverviewPane: View {
         return best
     }
 
+    private var tightestWarnBelow: Double {
+        guard let tightest else { return AppSettings.shared.warnBelowRemaining }
+        return AppSettings.shared.warnBelow(tightest.kind, tightest.label == "5-hour" ? .fiveHour : .weekly)
+    }
+
     /// The best case for "switch to this instead" among every OTHER
     /// provider's tightest window. Only surfaced when the current top pick
     /// is genuinely tight and the alternative has a real margin over it —
     /// otherwise this would just be noise on every visit to Overview.
     private var switchSuggestion: (kind: ProviderKind, title: String, remainingPercent: Double)? {
-        guard let tightest, tightest.window.remainingPercent < AppSettings.shared.warnBelowRemaining else { return nil }
+        guard let tightest, tightest.window.remainingPercent < tightestWarnBelow else { return nil }
         var best: (kind: ProviderKind, title: String, remainingPercent: Double)?
         for card in cards where card.kind != tightest.kind {
             for w in [card.fiveHour, card.weekly].compactMap({ $0 }) {
@@ -622,7 +637,7 @@ struct OverviewPane: View {
                 PaneHeader(title: "Overview")
 
                 if let tightest {
-                    HeroRemainingCard(providerTitle: tightest.title, windowLabel: tightest.label, window: tightest.window)
+                    HeroRemainingCard(providerTitle: tightest.title, windowLabel: tightest.label, window: tightest.window, warnBelow: tightestWarnBelow)
                 }
 
                 if let suggestion = switchSuggestion {

@@ -593,14 +593,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windows = kind.supportedLimitWindows.filter {
             settings.isLimitWindowShown($0, for: kind)
         }.map {
-            MenuBarWindow(kind: $0, remainingPercent: $0 == .fiveHour ? fiveHour : weekly)
+            MenuBarWindow(kind: $0, remainingPercent: $0 == .fiveHour ? fiveHour : weekly,
+                          warnBelow: settings.warnBelow(kind, $0))
         }
         let details = windows.map { window in
             let value = window.validRemaining.map { settings.displayMode.rowText(remaining: $0) } ?? "unavailable"
             return "\(window.kind.displayName): \(value)"
         }.joined(separator: ", ")
         return StatusBarPart(icon: icon, text: fallback, windows: windows,
-                             warning: windows.contains { ($0.validRemaining ?? 100) < settings.warnBelowRemaining },
+                             warning: windows.contains { ($0.validRemaining ?? 100) < ($0.warnBelow ?? settings.warnBelowRemaining) },
                              style: settings.limitStyle(for: kind),
                              accessibilityText: "\(kind.displayName): \(windows.isEmpty ? fallback : details)\(stateDescription)")
     }
@@ -653,7 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.setAccessibilityLabel(description)
         let signature = parts.map { part in
             let meters = part.windows.map {
-                "\($0.kind.rawValue):\($0.validRemaining.map { String(format: "%.1f", $0) } ?? "-")"
+                "\($0.kind.rawValue):\($0.validRemaining.map { String(format: "%.1f", $0) } ?? "-"):\($0.warnBelow ?? -1)"
             }.joined(separator: ",")
             return "\(part.accessibilityText)|\(meters)|\(part.warning)|\(part.style?.rawValue ?? "-")"
         }.joined(separator: "#") + "@\(font.pointSize)|\(settings.displayMode.rawValue)|\(settings.warnBelowRemaining)"

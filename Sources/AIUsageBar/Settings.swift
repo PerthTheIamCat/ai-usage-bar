@@ -175,6 +175,7 @@ final class AppSettings: ObservableObject {
     private enum Keys {
         static let displayMode = "displayMode"
         static let warnBelowRemaining = "warnBelowRemaining"
+        static let warnBelowOverrides = "warnBelowOverrides"
         static let showFiveHourInMenuBar = "showFiveHourInMenuBar"
         static let showWeeklyInMenuBar = "showWeeklyInMenuBar"
         static let thbPerUSD = "thbPerUSD"
@@ -233,6 +234,34 @@ final class AppSettings: ObservableObject {
             UserDefaults.standard.set(warnBelowRemaining, forKey: Keys.warnBelowRemaining)
             NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
         }
+    }
+
+    /// Per-window overrides of `warnBelowRemaining`, keyed
+    /// "<provider>.<window>". A window with no entry follows the global value.
+    @Published var warnBelowOverrides: [String: Double] {
+        didSet {
+            UserDefaults.standard.set(warnBelowOverrides, forKey: Keys.warnBelowOverrides)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    private static func warnKey(_ provider: ProviderKind, _ window: LimitWindowKind) -> String {
+        "\(provider.rawValue).\(window.rawValue)"
+    }
+
+    /// Remaining-percent threshold below which this window turns red and
+    /// notifies: its own override if set, otherwise the global value.
+    func warnBelow(_ provider: ProviderKind, _ window: LimitWindowKind) -> Double {
+        warnBelowOverrides[Self.warnKey(provider, window)] ?? warnBelowRemaining
+    }
+
+    func warnBelowOverride(_ provider: ProviderKind, _ window: LimitWindowKind) -> Double? {
+        warnBelowOverrides[Self.warnKey(provider, window)]
+    }
+
+    /// `nil` clears the override so the window follows the global value again.
+    func setWarnBelowOverride(_ value: Double?, _ provider: ProviderKind, _ window: LimitWindowKind) {
+        warnBelowOverrides[Self.warnKey(provider, window)] = value
     }
 
     /// Which Claude windows are shown at all — both in the menu-bar title
@@ -559,6 +588,7 @@ final class AppSettings: ObservableObject {
         displayMode = UsageDisplayMode(rawValue: d.string(forKey: Keys.displayMode) ?? "") ?? .used
         let stored = d.double(forKey: Keys.warnBelowRemaining)
         warnBelowRemaining = stored > 0 ? stored : 20
+        warnBelowOverrides = (d.dictionary(forKey: Keys.warnBelowOverrides) as? [String: Double]) ?? [:]
         let legacyShowFiveHour = d.object(forKey: Keys.showFiveHourInMenuBar) as? Bool ?? true
         let legacyShowWeekly = d.object(forKey: Keys.showWeeklyInMenuBar) as? Bool ?? true
         showFiveHourInMenuBar = legacyShowFiveHour
