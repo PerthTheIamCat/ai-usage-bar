@@ -103,6 +103,63 @@ enum DailyHistoryStore {
         return out
     }
 
+    /// A trend longer than the live 30-day scan, built from everything the
+    /// store has recorded with the live trend laid over it (live data wins
+    /// for the days it covers). `days == nil` means "all": from the earliest
+    /// recorded day through today. Days with nothing recorded stay zero.
+    static func extendedTrend(days: Int?, live: DailyTrend, fileURL: URL = defaultFileURL) -> DailyTrend {
+        lock.lock()
+        let store = load(fileURL)
+        lock.unlock()
+
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: live.days.last ?? Date())
+
+        var count = days ?? live.days.count
+        if days == nil, let earliest = store.keys.min().flatMap({ dayFormatter.date(from: $0) }) {
+            let span = calendar.dateComponents([.day], from: calendar.startOfDay(for: earliest), to: todayStart).day ?? 0
+            count = max(count, span + 1)
+        }
+        count = max(count, 1)
+
+        var out = DailyTrend()
+        out.days = (0..<count).map { calendar.date(byAdding: .day, value: -(count - 1 - $0), to: todayStart) ?? todayStart }
+        out.claudeTokens = Array(repeating: 0, count: count)
+        out.claudeCostUSD = Array(repeating: 0, count: count)
+        out.codexTokens = Array(repeating: 0, count: count)
+        out.codexCostUSD = Array(repeating: 0, count: count)
+        out.antigravityPrompts = Array(repeating: 0, count: count)
+        out.antigravityCostUSD = Array(repeating: 0, count: count)
+
+        var liveByDay: [String: Int] = [:]
+        for (i, day) in live.days.enumerated() { liveByDay[dayFormatter.string(from: day)] = i }
+
+        for i in out.days.indices {
+            let key = dayFormatter.string(from: out.days[i])
+            if let j = liveByDay[key] {
+                let hasLive = live.claudeTokens[j] > 0 || live.codexTokens[j] > 0 || live.antigravityPrompts[j] > 0
+                if hasLive {
+                    out.claudeTokens[i] = live.claudeTokens[j]
+                    out.claudeCostUSD[i] = live.claudeCostUSD[j]
+                    out.codexTokens[i] = live.codexTokens[j]
+                    out.codexCostUSD[i] = live.codexCostUSD[j]
+                    out.antigravityPrompts[i] = live.antigravityPrompts[j]
+                    out.antigravityCostUSD[i] = live.antigravityCostUSD[j]
+                    continue
+                }
+            }
+            if let saved = store[key] {
+                out.claudeTokens[i] = saved.claudeTokens
+                out.claudeCostUSD[i] = saved.claudeCostUSD
+                out.codexTokens[i] = saved.codexTokens
+                out.codexCostUSD[i] = saved.codexCostUSD
+                out.antigravityPrompts[i] = saved.antigravityPrompts
+                out.antigravityCostUSD[i] = saved.antigravityCostUSD
+            }
+        }
+        return out
+    }
+
     /// One CSV row per recorded day, oldest first, for exporting the full
     /// rollup rather than just the 30-day window the charts show.
     static func generateCSV(fileURL: URL = defaultFileURL) -> String {
