@@ -138,6 +138,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.apply(snap)
         }
 
+        NotificationCenter.default.addObserver(
+            forName: .usageAccountsChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.refresh()
+        }
+
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("com.aiusagebar.togglePopover"), object: nil, queue: .main
         ) { [weak self] _ in
@@ -287,6 +293,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         maybeRefreshExchangeRate()
         nextRefreshAt = Date().addingTimeInterval(refreshInterval)
         let previousSourcesFingerprint = lastSourcesFingerprint
+        // Read on the main thread: settings are main-thread state.
+        let accounts = AppSettings.shared.extraAccounts
         DispatchQueue.global(qos: .utility).async { [weak self] in
             // Most minutes nothing has written to any log we read — the Mac is
             // idle, or the user isn't using a CLI right now. Comparing a
@@ -294,7 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // `stat` calls instead of re-reading and re-parsing every log, and
             // that idle cost is what the app pays for the overwhelming
             // majority of the hours it is running.
-            let sourcesFingerprint = UsageReader.todaySourcesFingerprint()
+            let sourcesFingerprint = UsageReader.todaySourcesFingerprint(accounts: accounts)
             if let previous = previousSourcesFingerprint, previous == sourcesFingerprint {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.activeRefreshID == refreshID else { return }
@@ -310,7 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return
             }
-            let snap = UsageReader.snapshot(includePeriodStats: false) { message in
+            let snap = UsageReader.snapshot(includePeriodStats: false, accounts: accounts) { message in
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.activeRefreshID == refreshID else { return }
                     self.setLoadingStatus(message)
@@ -718,7 +726,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 if CommandLine.arguments.contains("--claude-statusline") {
     let input = FileHandle.standardInput.readDataToEndOfFile()
-    print(ClaudeLimitsReader.captureStatusLineInput(input))
+    // `--account <id>` routes the reading to an extra account's own snapshot.
+    let arguments = CommandLine.arguments
+    let accountID = arguments.firstIndex(of: "--account")
+        .flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+    print(ClaudeLimitsReader.captureStatusLineInput(input, accountID: accountID))
     exit(0)
 }
 
@@ -746,7 +758,7 @@ func dumpSessionActivities(_ provider: String, _ sessions: [SessionActivity]) {
 }
 
 if CommandLine.arguments.contains("--dump") {
-    let snap = UsageReader.snapshot()
+    let snap = UsageReader.snapshot(accounts: AppSettings.shared.extraAccounts)
     if let c = snap.claude {
         print("Claude: total=\(formatTokens(c.total)) in=\(c.inputTokens) out=\(c.outputTokens) cacheW=\(c.cacheCreationTokens) cacheR=\(c.cacheReadTokens) sessions=\(c.sessionCount) model=\(c.lastModel ?? "-")")
         if !c.skillCounts.isEmpty {
@@ -802,6 +814,17 @@ if CommandLine.arguments.contains("--dump") {
         }
     } else {
         print("Antigravity: not detected")
+    }
+    for reading in snap.accounts {
+        func percent(_ x: LimitWindow?) -> String { x.map { "\(Int($0.remainingPercent))% left" } ?? "n/a" }
+        let name = reading.account.title
+        if let c = reading.claude {
+            print("\(name): total=\(formatTokens(c.total)) sessions=\(c.sessionCount) 5h=\(percent(reading.claudeLimits?.fiveHour)) weekly=\(percent(reading.claudeLimits?.sevenDay))")
+        } else if let x = reading.codex {
+            print("\(name): total=\(formatTokens(x.totalTokens)) sessions=\(x.sessionCount) 5h=\(percent(reading.codexLimits?.primary)) weekly=\(percent(reading.codexLimits?.secondary))")
+        } else {
+            print("\(name): not detected at \(reading.account.path)")
+        }
     }
     exit(0)
 }

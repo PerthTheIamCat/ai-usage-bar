@@ -5,6 +5,9 @@ import AppKit
 extension Notification.Name {
     /// Posted whenever a setting changes so the status item re-renders.
     static let usageSettingsChanged = Notification.Name("usageSettingsChanged")
+    /// Posted when the list of extra accounts changes, so the app reads the
+    /// new account right away instead of waiting for the next refresh tick.
+    static let usageAccountsChanged = Notification.Name("usageAccountsChanged")
 }
 
 /// How percentages are presented everywhere (menu-bar title, menu rows, bars).
@@ -204,6 +207,28 @@ final class AppSettings: ObservableObject {
         static let sessionAlertThreshold = "sessionAlertThreshold"
         static let touchBarEnabled = "touchBarEnabled"
         static let forceTouchBarSupport = "forceTouchBarSupport"
+        static let extraAccounts = "extraAccounts"
+    }
+
+    /// Additional Claude / Codex accounts, each read from its own config
+    /// directory. The default account is always read and is not listed here.
+    @Published var extraAccounts: [ExtraAccount] {
+        didSet {
+            if let data = try? JSONEncoder().encode(extraAccounts) {
+                UserDefaults.standard.set(data, forKey: Keys.extraAccounts)
+            }
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+            NotificationCenter.default.post(name: .usageAccountsChanged, object: nil)
+        }
+    }
+
+    func addAccount(provider: ProviderKind, name: String, path: String) {
+        let id = ExtraAccount.makeID(provider: provider, name: name, existing: Set(extraAccounts.map(\.id)))
+        extraAccounts.append(ExtraAccount(id: id, provider: provider, name: name, path: path))
+    }
+
+    func removeAccount(id: String) {
+        extraAccounts.removeAll { $0.id == id }
     }
 
     @Published var touchBarEnabled: Bool {
@@ -678,5 +703,7 @@ final class AppSettings: ObservableObject {
         sessionAlertThreshold = storedSessionThreshold > 0 ? storedSessionThreshold : 5_000_000
         touchBarEnabled = d.object(forKey: Keys.touchBarEnabled) as? Bool ?? false
         forceTouchBarSupport = d.object(forKey: Keys.forceTouchBarSupport) as? Bool ?? false
+        extraAccounts = (d.data(forKey: Keys.extraAccounts))
+            .flatMap { try? JSONDecoder().decode([ExtraAccount].self, from: $0) } ?? []
     }
 }

@@ -16,24 +16,47 @@ enum ClaudeStatusLineSetup {
     static let bridgeScriptURL = claudeDir.appendingPathComponent("ai-usage-bar-statusline.sh")
     static let settingsURL = claudeDir.appendingPathComponent("settings.json")
 
-    private static let bridgeScriptContents = """
-        #!/bin/zsh
-        # Claude Code statusLine bridge for AI Usage Bar.
-        # Claude Code sends JSON on stdin; the app stores only rate_limits locally and
-        # prints a compact status line back to Claude Code.
-        set -u
+    /// Where the bridge goes: the default `~/.claude`, or an extra account's
+    /// own config directory. Each extra account's script passes its id so the
+    /// reading lands in that account's snapshot, not the default one.
+    private struct Target {
+        let dir: URL
+        let accountID: String?
 
-        APP_BIN="${AI_USAGE_BAR_BIN:-/Applications/AIUsageBar.app/Contents/MacOS/AIUsageBar}"
-        if [[ ! -x "$APP_BIN" ]]; then
-            print -u2 "AIUsageBar statusline bridge: app not found at $APP_BIN"
-            exit 0
-        fi
+        init(account: ExtraAccount?) {
+            dir = account?.rootURL ?? ClaudeStatusLineSetup.claudeDir
+            accountID = account?.id
+        }
 
-        exec "$APP_BIN" --claude-statusline
+        var scriptURL: URL { dir.appendingPathComponent("ai-usage-bar-statusline.sh") }
+        var settingsURL: URL { dir.appendingPathComponent("settings.json") }
+        var settingsDisplayPath: String {
+            accountID == nil ? "~/.claude/settings.json" : settingsURL.path
+        }
 
-        """
+        var scriptContents: String {
+            let accountArgument = accountID.map { " --account \($0)" } ?? ""
+            return """
+                #!/bin/zsh
+                # Claude Code statusLine bridge for AI Usage Bar.
+                # Claude Code sends JSON on stdin; the app stores only rate_limits locally and
+                # prints a compact status line back to Claude Code.
+                set -u
 
-    static func currentState() -> State {
+                APP_BIN="${AI_USAGE_BAR_BIN:-/Applications/AIUsageBar.app/Contents/MacOS/AIUsageBar}"
+                if [[ ! -x "$APP_BIN" ]]; then
+                    print -u2 "AIUsageBar statusline bridge: app not found at $APP_BIN"
+                    exit 0
+                fi
+
+                exec "$APP_BIN" --claude-statusline\(accountArgument)
+
+                """
+        }
+    }
+
+    static func currentState(for account: ExtraAccount? = nil) -> State {
+        let settingsURL = Target(account: account).settingsURL
         guard let data = try? Data(contentsOf: settingsURL),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let statusLine = obj["statusLine"] as? [String: Any],
@@ -46,14 +69,22 @@ enum ClaudeStatusLineSetup {
         case conflictingStatusLine
         case writeFailed(String)
 
-        var errorDescription: String? {
+        /// `settingsPath` names the file in the message, since an extra
+        /// account's settings live outside `~/.claude`.
+        func message(settingsPath: String) -> String {
             switch self {
             case .conflictingStatusLine:
-                return "A different statusLine command is already configured in ~/.claude/settings.json. Merge the bridge command in manually."
+                return "A different statusLine command is already configured in \(settingsPath). Merge the bridge command in manually."
             case .writeFailed(let reason):
-                return "Could not update ~/.claude/settings.json: \(reason)"
+                return "Could not update \(settingsPath): \(reason)"
             }
         }
+
+        var errorDescription: String? { message(settingsPath: "~/.claude/settings.json") }
+    }
+
+    static func settingsDisplayPath(for account: ExtraAccount?) -> String {
+        Target(account: account).settingsDisplayPath
     }
 
     /// Writes the bridge script and, only if `~/.claude/settings.json` has no
@@ -62,17 +93,19 @@ enum ClaudeStatusLineSetup {
     /// new key next to the opening brace rather than re-serializing the
     /// whole document, so unrelated formatting is left alone.
     @discardableResult
-    static func install() -> Result<Void, InstallError> {
+    static func install(for account: ExtraAccount? = nil) -> Result<Void, InstallError> {
+        let target = Target(account: account)
+        let settingsURL = target.settingsURL
         do {
-            try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
-            try bridgeScriptContents.write(to: bridgeScriptURL, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bridgeScriptURL.path)
+            try FileManager.default.createDirectory(at: target.dir, withIntermediateDirectories: true)
+            try target.scriptContents.write(to: target.scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: target.scriptURL.path)
         } catch {
             return .failure(.writeFailed(error.localizedDescription))
         }
 
         guard FileManager.default.fileExists(atPath: settingsURL.path) else {
-            return writeNewSettingsFile()
+            return writeNewSettingsFile(target)
         }
 
         guard let text = try? String(contentsOf: settingsURL, encoding: .utf8) else {
@@ -88,19 +121,19 @@ enum ClaudeStatusLineSetup {
         // object leaves a trailing comma and produces invalid JSON, which
         // would break Claude Code's own config. There is nothing to preserve
         // in that case, so write a clean file instead.
-        guard !obj.isEmpty else { return writeNewSettingsFile() }
+        guard !obj.isEmpty else { return writeNewSettingsFile(target) }
 
         guard let braceRange = text.range(of: "{") else {
             return .failure(.writeFailed("existing file has no top-level object"))
         }
-        let entry = "\n  \"statusLine\": {\"type\": \"command\", \"command\": \"\(bridgeScriptURL.path)\"},"
+        let entry = "\n  \"statusLine\": {\"type\": \"command\", \"command\": \"\(target.scriptURL.path)\"},"
         var updated = text
         updated.insert(contentsOf: entry, at: braceRange.upperBound)
 
         // Keep the change reversible without relying on other tools' backups.
         // If the backup can't be written, don't touch the real file either —
         // silently proceeding would drop the safety net without saying so.
-        let backupURL = claudeDir.appendingPathComponent("settings.json.bak-aiusagebar")
+        let backupURL = target.dir.appendingPathComponent("settings.json.bak-aiusagebar")
         do {
             try text.write(to: backupURL, atomically: true, encoding: .utf8)
         } catch {
@@ -115,14 +148,14 @@ enum ClaudeStatusLineSetup {
         return .success(())
     }
 
-    private static func writeNewSettingsFile() -> Result<Void, InstallError> {
+    private static func writeNewSettingsFile(_ target: Target) -> Result<Void, InstallError> {
         let contents = """
             {
-              "statusLine": {"type": "command", "command": "\(bridgeScriptURL.path)"}
+              "statusLine": {"type": "command", "command": "\(target.scriptURL.path)"}
             }
             """
         do {
-            try contents.write(to: settingsURL, atomically: true, encoding: .utf8)
+            try contents.write(to: target.settingsURL, atomically: true, encoding: .utf8)
             return .success(())
         } catch {
             return .failure(.writeFailed(error.localizedDescription))

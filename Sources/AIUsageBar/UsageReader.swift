@@ -22,7 +22,7 @@ enum UsageReader {
     // per-file incremental parse caches below replace them and keep working
     // while a file grows.
     private static let codexLimitsCacheLock = NSLock()
-    private static var codexLimitsCache: (fingerprint: String, value: CodexLimits?)?
+    private static var codexLimitsCache: [String: (fingerprint: String, value: CodexLimits?)] = [:]
     private static let trendCacheLock = NSLock()
     private static var dailyTrendCache: (fingerprint: String, days: Int, value: DailyTrend)?
 
@@ -32,6 +32,7 @@ enum UsageReader {
     ///   it on its own slower cadence.
     static func snapshot(
         includePeriodStats: Bool = false,
+        accounts: [ExtraAccount] = [],
         progress: ((String) -> Void)? = nil
     ) -> UsageSnapshot {
         let fm = FileManager.default
@@ -68,6 +69,10 @@ enum UsageReader {
         {
             snap.antigravity = readAntigravityToday()
         }
+        if !accounts.isEmpty {
+            progress?("Reading extra accounts…")
+            snap.accounts = accounts.map(accountReading)
+        }
         progress?("Reading activity timeline…")
         snap.hourlyUsage = readHourlyUsage()
         if includePeriodStats {
@@ -79,6 +84,27 @@ enum UsageReader {
         progress?("Updating display…")
         snap.updatedAt = Date()
         return snap
+    }
+
+    /// Today's usage and limits for one extra account, read from its own
+    /// config directory. Daily history, the activity chart and notifications
+    /// stay with the default account; extra accounts show usage only.
+    static func accountReading(_ account: ExtraAccount) -> AccountReading {
+        var reading = AccountReading(account: account)
+        let exists = FileManager.default.fileExists(atPath: account.logsDir.path)
+        switch account.provider {
+        case .claude:
+            if exists { reading.claude = readClaudeToday(under: account.claudeProjectsDir) }
+            reading.claudeLimits = ClaudeLimitsReader.fetch(accountID: account.id)
+        case .codex:
+            if exists {
+                reading.codex = readCodexToday(under: account.codexSessionsDir)
+                reading.codexLimits = codexLimits(under: account.codexSessionsDir)
+            }
+        case .antigravity:
+            break
+        }
+        return reading
     }
 
     /// Codex data is read from local JSONL files rather than an API, so it
@@ -699,7 +725,7 @@ enum UsageReader {
         }
     }
 
-    private static func readClaudeToday() -> ClaudeUsage {
+    private static func readClaudeToday(under claudeDir: URL = UsageReader.claudeDir) -> ClaudeUsage {
         readClaude(matching: { isTodayLocal(isoTimestamp: $0) },
                    files: filesModifiedToday(under: claudeDir, ext: "jsonl"),
                    includeSessions: true)
@@ -848,7 +874,7 @@ enum UsageReader {
     /// Newest account-wide rate-limit snapshot Codex wrote to any recent
     /// session log. The 5h/weekly windows are account-global, so the freshest
     /// reading across all sessions is what we want (not just today's).
-    static func codexLimits() -> CodexLimits? {
+    static func codexLimits(under codexDir: URL = UsageReader.codexDir) -> CodexLimits? {
         let fm = FileManager.default
         guard fm.fileExists(atPath: codexDir.path) else { return nil }
         let cutoff = Date().addingTimeInterval(-8 * 24 * 3600)
@@ -874,7 +900,7 @@ enum UsageReader {
             .map { "\($0.url.path)|\($0.modified.timeIntervalSince1970)|\($0.size)" }
             .joined(separator: "|")
         codexLimitsCacheLock.lock()
-        if let cached = codexLimitsCache, cached.fingerprint == fingerprint {
+        if let cached = codexLimitsCache[codexDir.path], cached.fingerprint == fingerprint {
             codexLimitsCacheLock.unlock()
             return cached.value
         }
@@ -889,7 +915,7 @@ enum UsageReader {
         }
 
         codexLimitsCacheLock.lock()
-        codexLimitsCache = (fingerprint, result)
+        codexLimitsCache[codexDir.path] = (fingerprint, result)
         codexLimitsCacheLock.unlock()
         return result
     }
@@ -1065,7 +1091,7 @@ enum UsageReader {
         }
     }
 
-    private static func readCodexToday() -> CodexUsage {
+    private static func readCodexToday(under codexDir: URL = UsageReader.codexDir) -> CodexUsage {
         readCodex(matching: { isTodayLocal(isoTimestamp: $0) },
                   files: filesModifiedToday(under: codexDir, ext: "jsonl"),
                   includeSessions: true)
@@ -1170,9 +1196,24 @@ enum UsageReader {
     /// skip the whole scan: an idle Mac then costs a few dozen `stat` calls a
     /// minute instead of re-reading and re-parsing the logs from scratch.
     /// Deliberately built from metadata only — no file is opened here.
-    static func todaySourcesFingerprint() -> String {
+    static func todaySourcesFingerprint(accounts: [ExtraAccount] = []) -> String {
         let fm = FileManager.default
         var parts: [String] = []
+        for account in accounts {
+            // The account list itself is part of the signature, so adding or
+            // removing one forces a re-read even when no log has changed.
+            parts.append("account:\(account.id)|\(account.path)")
+            if fm.fileExists(atPath: account.logsDir.path) {
+                parts.append(filesFingerprint(filesModifiedToday(under: account.logsDir, ext: "jsonl")))
+                if account.provider == .codex {
+                    parts.append(filesFingerprint(filesModified(under: account.logsDir, ext: "jsonl", sinceDaysAgo: 8)))
+                }
+            }
+            if account.provider == .claude,
+               let url = ClaudeLimitsReader.accountSnapshotURL(accountID: account.id) {
+                parts.append(fileStamp(url))
+            }
+        }
         parts.append("\(calendar.startOfDay(for: Date()).timeIntervalSince1970)")
         if fm.fileExists(atPath: claudeDir.path) {
             parts.append(filesFingerprint(filesModifiedToday(under: claudeDir, ext: "jsonl")))
