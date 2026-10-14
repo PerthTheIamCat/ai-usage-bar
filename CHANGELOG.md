@@ -4,6 +4,11 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Wrong "hits the limit" time:** Antigravity model groups (Gemini, Claude/GPT) no longer share one pace history, so a quiet group can't inherit another's projection. Pace is also ignored when it disagrees with the percentage on screen, the reading is stale, or the climb is negligible.
+- **Reset time:** every limit row now shows the actual reset clock time next to "resets in", and the pace warning no longer hides it.
+
 ## [0.14.0] - 2026-10-13
 
 ### Added

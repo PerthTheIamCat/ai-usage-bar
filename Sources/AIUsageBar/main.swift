@@ -523,6 +523,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let w = snap.codexLimits?.secondary { BurnRateTracker.record(.codex, .weekly, usedPercent: w.usedPercent) }
         if let w = snap.antigravity?.fiveHour { BurnRateTracker.record(.antigravity, .fiveHour, usedPercent: w.usedPercent) }
         if let w = snap.antigravity?.weekly { BurnRateTracker.record(.antigravity, .weekly, usedPercent: w.usedPercent) }
+        for g in snap.antigravity?.groups ?? [] {
+            if let w = g.fiveHour { BurnRateTracker.record(.antigravity, .fiveHour, usedPercent: w.usedPercent, group: g.id) }
+            if let w = g.weekly { BurnRateTracker.record(.antigravity, .weekly, usedPercent: w.usedPercent, group: g.id) }
+        }
     }
 
     // MARK: - Status bar title

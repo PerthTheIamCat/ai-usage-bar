@@ -30,28 +30,38 @@ enum BurnRateTracker {
     private static let maxSampleAge: TimeInterval = 6 * 3600
     private static let maxSamples = 120
 
-    private static func key(_ provider: ProviderKind, _ window: LimitWindowKind) -> String {
-        "burnRateSamples.\(provider.rawValue).\(window.rawValue)"
+    /// A reading older than this no longer describes "now", so no pace is
+    /// claimed from it.
+    private static let maxLatestAge: TimeInterval = 15 * 60
+    /// Less climb than this across the lookback is rounding noise, not pace.
+    private static let minClimb = 1.0
+
+    /// `group` separates windows that share a provider and kind — Antigravity
+    /// reports Gemini and Claude/GPT quotas as independent 5-hour/weekly pairs.
+    private static func key(_ provider: ProviderKind, _ window: LimitWindowKind, _ group: String?) -> String {
+        let base = "burnRateSamples.\(provider.rawValue).\(window.rawValue)"
+        guard let group, !group.isEmpty else { return base }
+        return base + "." + group
     }
 
-    private static func load(_ provider: ProviderKind, _ window: LimitWindowKind, _ defaults: UserDefaults) -> [Sample] {
-        guard let data = defaults.data(forKey: key(provider, window)),
+    private static func load(_ provider: ProviderKind, _ window: LimitWindowKind, _ group: String?, _ defaults: UserDefaults) -> [Sample] {
+        guard let data = defaults.data(forKey: key(provider, window, group)),
               let samples = try? JSONDecoder().decode([Sample].self, from: data)
         else { return [] }
         return samples
     }
 
-    private static func save(_ provider: ProviderKind, _ window: LimitWindowKind, _ samples: [Sample], _ defaults: UserDefaults) {
+    private static func save(_ provider: ProviderKind, _ window: LimitWindowKind, _ group: String?, _ samples: [Sample], _ defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(samples) else { return }
-        defaults.set(data, forKey: key(provider, window))
+        defaults.set(data, forKey: key(provider, window, group))
     }
 
     /// Call once per refresh with whatever `usedPercent` is currently shown
     /// for that provider/window. Cheap — this only ever touches a handful of
     /// small values, never the logs. `defaults` is only ever overridden by
     /// tests, to keep them from reading or writing this Mac's real state.
-    static func record(_ provider: ProviderKind, _ window: LimitWindowKind, usedPercent: Double, at: Date = Date(), defaults: UserDefaults = .standard) {
-        var samples = load(provider, window, defaults)
+    static func record(_ provider: ProviderKind, _ window: LimitWindowKind, usedPercent: Double, group: String? = nil, at: Date = Date(), defaults: UserDefaults = .standard) {
+        var samples = load(provider, window, group, defaults)
         if let last = samples.last {
             // A drop of more than a couple of points means the window rolled
             // over (or a stale-data fallback replaced a fresher reading) —
@@ -68,21 +78,32 @@ enum BurnRateTracker {
         if samples.count > maxSamples {
             samples.removeFirst(samples.count - maxSamples)
         }
-        save(provider, window, samples, defaults)
+        save(provider, window, group, samples, defaults)
     }
 
     /// nil whenever there isn't enough recent signal to say anything, or the
     /// window isn't actually climbing toward full.
-    static func forecast(_ provider: ProviderKind, _ window: LimitWindowKind, resetsAt: Date?, now: Date = Date(), defaults: UserDefaults = .standard) -> Forecast? {
-        let recent = load(provider, window, defaults).filter { now.timeIntervalSince($0.at) <= lookback }
+    static func forecast(_ provider: ProviderKind, _ window: LimitWindowKind, resetsAt: Date?, group: String? = nil, currentPercent: Double? = nil, now: Date = Date(), defaults: UserDefaults = .standard) -> Forecast? {
+        // The weekly window moves too slowly for a 45-minute fit to mean
+        // anything, so it gets the whole retained history.
+        let span = window == .weekly ? maxSampleAge : lookback
+        let recent = load(provider, window, group, defaults).filter { now.timeIntervalSince($0.at) <= span }
         guard recent.count >= 3, let latest = recent.last,
+              now.timeIntervalSince(latest.at) <= maxLatestAge,
               recent.first!.at.distance(to: latest.at) >= 5 * 60,
+              latest.usedPercent - recent.first!.usedPercent >= minClimb,
               let rate = linearRatePerMinute(recent), rate > 0
         else { return nil }
+        // The row on screen is the source of truth: a stored history that
+        // disagrees with it belongs to some other reading.
+        if let currentPercent {
+            guard currentPercent > 0, abs(currentPercent - latest.usedPercent) <= 2 else { return nil }
+        }
 
         let minutesToFull = (100 - latest.usedPercent) / rate
         guard minutesToFull.isFinite, minutesToFull > 0 else { return nil }
         let eta = latest.at.addingTimeInterval(minutesToFull * 60)
+        guard eta > now else { return nil }
         return Forecast(percentPerMinute: rate, etaToFull: eta, willDepleteBeforeReset: resetsAt.map { eta < $0 } ?? false)
     }
 
