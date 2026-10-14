@@ -246,13 +246,23 @@ struct LimitRow: View {
     }
 }
 
+/// What to do to get a fresh limit reading once a stored window has rolled
+/// over. Each provider only refreshes when its own tool runs, so the hint has
+/// to name the right one (it used to always say Claude).
+func freshReadingHint(for provider: ProviderKind?) -> String {
+    switch provider {
+    case .codex: return "run Codex for a fresh reading"
+    case .antigravity: return "use Antigravity for a fresh reading"
+    case .claude, .none: return "use Claude Code or the Desktop app for a fresh reading"
+    }
+}
+
 /// A limit window row, or a "window reset" note in its place once the
 /// stored percentage has rolled past its reset time and is meaningless.
 @ViewBuilder
 func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil, group: String? = nil) -> some View {
     if let r = w.resetsAt, r <= Date() {
-        let appName = (provider == .antigravity) ? "Antigravity" : ((provider == .codex) ? "Codex" : "Claude Code")
-        NoteText(text: "\(name): window reset — use \(appName) for a fresh reading")
+        NoteText(text: "\(name): window reset — \(freshReadingHint(for: provider))")
     } else {
         LimitRow(name: name, window: w, provider: provider, windowKind: windowKind, group: group)
     }

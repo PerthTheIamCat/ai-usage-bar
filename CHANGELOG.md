@@ -7,9 +7,11 @@ All notable changes to AI Usage Bar are documented in this file.
 ### Added
 
 - **Multiple accounts:** Settings → Accounts adds extra Claude Code and Codex accounts, each read from its own config folder (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). Each shows its own limits and today's usage under "Other accounts" in the popover. Extra Claude accounts get their own status-line bridge from the same tab.
+- **Notarized releases:** The release workflow signs with Developer ID and notarizes the app and disk image when Apple signing secrets are configured.
 
 ### Fixed
 
+- **Window-reset hint:** A rolled-over Codex or Antigravity limit now tells you to use that tool for a fresh reading instead of always pointing at Claude.
 - **Wrong "hits the limit" time:** Antigravity model groups (Gemini, Claude/GPT) no longer share one pace history, so a quiet group can't inherit another's projection. Pace is also ignored when it disagrees with the percentage on screen, the reading is stale, or the climb is negligible.
 - **Reset time:** every limit row now shows the actual reset clock time next to "resets in", and the pace warning no longer hides it.
 

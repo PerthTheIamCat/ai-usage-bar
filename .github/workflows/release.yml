@@ -30,11 +30,62 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Build Apple Silicon release asset
+      # Optional: Developer ID signing + notarization. Runs only when the
+      # APPLE_* secrets exist; without them the release is built ad-hoc signed
+      # exactly as before. Required secrets:
+      #   APPLE_CERTIFICATE_P12     base64 of the "Developer ID Application" .p12
+      #   APPLE_CERTIFICATE_PASSWORD password of that .p12
+      #   APPLE_ID                  Apple ID used for notarytool
+      #   APPLE_APP_PASSWORD        app-specific password for that Apple ID
+      #   APPLE_TEAM_ID             10-character Developer Team ID
+      - name: Import Developer ID certificate
+        id: signing
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$APPLE_CERTIFICATE_P12" || -z "$APPLE_ID" ]]; then
+            echo "Apple signing secrets not set; building ad-hoc signed." >&2
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$APPLE_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          test -n "$identity" || { echo "No Developer ID Application identity in certificate." >&2; exit 1; }
+          xcrun notarytool store-credentials release-notary \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+
+      - name: Build Apple Silicon release assets
         env:
           BUILD_NUMBER: ${{ github.run_number }}
           TAG_NAME: ${{ inputs.tag || github.ref_name }}
-        run: ./make-release.sh "${TAG_NAME#v}" "$BUILD_NUMBER"
+          SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
+        run: |
+          if [[ "$SIGNING_ENABLED" == "true" ]]; then
+            export CODESIGN_IDENTITY="$SIGNING_IDENTITY"
+            export NOTARY_KEYCHAIN_PROFILE=release-notary
+          fi
+          ./make-release.sh "${TAG_NAME#v}" "$BUILD_NUMBER"
 
       - name: Create or update prerelease
         env:
