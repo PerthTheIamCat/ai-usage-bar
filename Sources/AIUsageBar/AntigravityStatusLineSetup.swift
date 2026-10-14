@@ -11,8 +11,18 @@ enum AntigravityStatusLineSetup {
 
     static let antigravityDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".gemini/antigravity-cli", isDirectory: true)
-    static let bridgeScriptURL = antigravityDir.appendingPathComponent("ai-usage-bar-statusline.sh")
-    static let settingsURL = antigravityDir.appendingPathComponent("settings.json")
+    static let bridgeScriptURL = scriptURL(in: antigravityDir)
+    static let settingsURL = settingsFileURL(in: antigravityDir)
+
+    // Directory-parameterised so tests can exercise install() against a
+    // temporary directory instead of the real ~/.gemini/antigravity-cli.
+    static func scriptURL(in directory: URL) -> URL {
+        directory.appendingPathComponent("ai-usage-bar-statusline.sh")
+    }
+
+    static func settingsFileURL(in directory: URL) -> URL {
+        directory.appendingPathComponent("settings.json")
+    }
 
     private static let bridgeScriptContents = """
         #!/bin/zsh
@@ -30,8 +40,8 @@ enum AntigravityStatusLineSetup {
 
         """
 
-    static func currentState() -> State {
-        guard let data = try? Data(contentsOf: settingsURL),
+    static func currentState(in directory: URL = antigravityDir) -> State {
+        guard let data = try? Data(contentsOf: settingsFileURL(in: directory)),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let statusLine = obj["statusLine"] as? [String: Any],
               let command = statusLine["command"] as? String
@@ -57,9 +67,11 @@ enum AntigravityStatusLineSetup {
     /// has not configured another one. Existing settings are backed up before
     /// they are changed so the setup remains reversible.
     @discardableResult
-    static func install() -> Result<Void, InstallError> {
+    static func install(in directory: URL = antigravityDir) -> Result<Void, InstallError> {
+        let bridgeScriptURL = scriptURL(in: directory)
+        let settingsURL = settingsFileURL(in: directory)
         do {
-            try FileManager.default.createDirectory(at: antigravityDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try bridgeScriptContents.write(to: bridgeScriptURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bridgeScriptURL.path)
         } catch {
@@ -67,7 +79,7 @@ enum AntigravityStatusLineSetup {
         }
 
         guard FileManager.default.fileExists(atPath: settingsURL.path) else {
-            return writeNewSettingsFile()
+            return writeNewSettingsFile(settingsURL: settingsURL, bridgeScriptURL: bridgeScriptURL)
         }
         guard let text = try? String(contentsOf: settingsURL, encoding: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
@@ -94,7 +106,7 @@ enum AntigravityStatusLineSetup {
             return .failure(.writeFailed("existing file has no top-level object"))
         }
 
-        let backupURL = antigravityDir.appendingPathComponent("settings.json.bak-aiusagebar")
+        let backupURL = directory.appendingPathComponent("settings.json.bak-aiusagebar")
         do {
             try text.write(to: backupURL, atomically: true, encoding: .utf8)
             try updated.write(to: settingsURL, atomically: true, encoding: .utf8)
@@ -104,7 +116,7 @@ enum AntigravityStatusLineSetup {
         return .success(())
     }
 
-    private static func writeNewSettingsFile() -> Result<Void, InstallError> {
+    private static func writeNewSettingsFile(settingsURL: URL, bridgeScriptURL: URL) -> Result<Void, InstallError> {
         let contents = """
             {
               "statusLine": {"type": "command", "command": "\(bridgeScriptURL.path)", "stack_with_default": true}
