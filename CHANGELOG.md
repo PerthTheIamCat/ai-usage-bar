@@ -4,8 +4,14 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-14
+
 ### Added
 
+- **DMG installer:** Releases now ship as a `.dmg` (drag to Applications) instead of a ZIP, and the in-app updater feed uses it.
+- **90-day and All trends:** The analytics trend picker gains 90 days and All, built from recorded history beyond the live 30-day scan.
+- **Per-window low-limit thresholds:** Each provider's 5-hour and weekly window can override the global warn-below threshold in Settings.
+- **Daily history CSV export:** Export › "Save daily history CSV…" writes one row per day.
 - **Nicer disk image:** The `.dmg` opens with a styled window — background, arrow and fixed icon positions — instead of a plain Finder list. `DMG_PLAIN=1 ./make-dmg.sh` keeps the plain layout.
 - **Multiple accounts:** Settings → Accounts adds extra Claude Code and Codex accounts, each read from its own config folder (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). Each shows its own limits and today's usage under "Other accounts" in the popover. Extra Claude accounts get their own status-line bridge from the same tab.
 - **Notarized releases:** The release workflow signs with Developer ID and notarizes the app and disk image when Apple signing secrets are configured.
