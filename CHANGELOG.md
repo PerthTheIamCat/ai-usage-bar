@@ -6,6 +6,7 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ### Added
 
+- **Nicer disk image:** The `.dmg` opens with a styled window — background, arrow and fixed icon positions — instead of a plain Finder list. `DMG_PLAIN=1 ./make-dmg.sh` keeps the plain layout.
 - **Multiple accounts:** Settings → Accounts adds extra Claude Code and Codex accounts, each read from its own config folder (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). Each shows its own limits and today's usage under "Other accounts" in the popover. Extra Claude accounts get their own status-line bridge from the same tab.
 - **Notarized releases:** The release workflow signs with Developer ID and notarizes the app and disk image when Apple signing secrets are configured.
 
