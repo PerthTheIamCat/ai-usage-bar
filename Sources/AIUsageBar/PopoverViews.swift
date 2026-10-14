@@ -190,10 +190,11 @@ struct LimitRow: View {
     let window: LimitWindow
     var provider: ProviderKind?
     var windowKind: LimitWindowKind?
+    var group: String?
 
     private var forecast: BurnRateTracker.Forecast? {
         guard let provider, let windowKind else { return nil }
-        return BurnRateTracker.forecast(provider, windowKind, resetsAt: window.resetsAt)
+        return BurnRateTracker.forecast(provider, windowKind, resetsAt: window.resetsAt, group: group, currentPercent: window.usedPercent)
     }
 
     var body: some View {
@@ -208,21 +209,21 @@ struct LimitRow: View {
             }
             LimitBarRepresentable(remainingPercent: remaining)
                 .frame(height: 5)
-            // At the current pace this window will hit 100% before it resets
-            // — the single most-requested thing across every comparable
-            // tool. Takes priority over the plain reset caption because it's
-            // the more actionable fact when it applies.
-            if let forecast = forecast?.willDepleteBeforeReset == true ? forecast : nil {
-                Text("⚠︎ at this pace, hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened)) — before it resets")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.orange)
-            } else if let reset = window.resetsAt {
-                // The Claude Desktop snapshot carries percentages but no
-                // reset time, so this caption used to read "resets in —"
-                // forever. Say something useful or say nothing.
-                Text("resets in \(humanReset(reset))")
+            // The reset caption always shows (with the actual clock time, so
+            // the warning below can't be misread). The Claude Desktop
+            // snapshot carries percentages but no reset time, so that case
+            // falls through to the other captions.
+            if let reset = window.resetsAt {
+                Text("resets in \(humanReset(reset)) · \(resetClock(reset))")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
+                // At the current pace this window will hit 100% before it
+                // resets — the most actionable fact when it applies.
+                if let forecast = forecast, forecast.willDepleteBeforeReset {
+                    Text("⚠︎ at this pace, hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened)) — before it resets")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.orange)
+                }
             } else if let desc = window.resetDescription, !desc.isEmpty {
                 Text(desc)
                     .font(.system(size: 10.5))
@@ -240,12 +241,12 @@ struct LimitRow: View {
 /// A limit window row, or a "window reset" note in its place once the
 /// stored percentage has rolled past its reset time and is meaningless.
 @ViewBuilder
-func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil) -> some View {
+func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil, group: String? = nil) -> some View {
     if let r = w.resetsAt, r <= Date() {
         let appName = (provider == .antigravity) ? "Antigravity" : ((provider == .codex) ? "Codex" : "Claude Code")
         NoteText(text: "\(name): window reset — use \(appName) for a fresh reading")
     } else {
-        LimitRow(name: name, window: w, provider: provider, windowKind: windowKind)
+        LimitRow(name: name, window: w, provider: provider, windowKind: windowKind, group: group)
     }
 }
 
@@ -388,7 +389,7 @@ private struct ProviderSummaryCard: View {
     /// anything useful about it.
     private var fiveHourForecast: BurnRateTracker.Forecast? {
         guard let w = fiveHour else { return nil }
-        return BurnRateTracker.forecast(kind, .fiveHour, resetsAt: w.resetsAt)
+        return BurnRateTracker.forecast(kind, .fiveHour, resetsAt: w.resetsAt, currentPercent: w.usedPercent)
     }
 
     var body: some View {
@@ -897,10 +898,10 @@ struct AntigravityPane: View {
                 ForEach(g.groups) { group in
                     CaptionText(title: group.name, info: group.description)
                     if settings.isLimitWindowShown(.fiveHour, for: .antigravity), let w = group.fiveHour {
-                        limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour)
+                        limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour, group: group.id)
                     }
                     if settings.isLimitWindowShown(.weekly, for: .antigravity), let w = group.weekly {
-                        limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly)
+                        limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly, group: group.id)
                     }
                     if !settings.isLimitWindowShown(.fiveHour, for: .antigravity)
                         && !settings.isLimitWindowShown(.weekly, for: .antigravity) {

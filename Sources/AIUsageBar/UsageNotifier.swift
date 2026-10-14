@@ -111,7 +111,7 @@ final class UsageNotifier {
             firedKeys.remove(key)
             return
         }
-        guard let forecast = BurnRateTracker.forecast(provider, .fiveHour, resetsAt: resetsAt),
+        guard let forecast = BurnRateTracker.forecast(provider, .fiveHour, resetsAt: resetsAt, currentPercent: window.usedPercent),
               forecast.willDepleteBeforeReset
         else {
             firedKeys.remove(key)
