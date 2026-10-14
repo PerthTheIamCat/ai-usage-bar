@@ -3,7 +3,7 @@
 .swiftpm/
 graphify-out/
 AIUsageBar.app/
-AIUsageBar-*.zip
-AIUsageBar-*.zip.sha256
+AIUsageBar-*.dmg
+AIUsageBar-*.dmg.sha256
 *.xcarchive
 **serena**
