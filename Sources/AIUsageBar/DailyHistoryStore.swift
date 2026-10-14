@@ -102,4 +102,23 @@ enum DailyHistoryStore {
         }
         return out
     }
+
+    /// One CSV row per recorded day, oldest first, for exporting the full
+    /// rollup rather than just the 30-day window the charts show.
+    static func generateCSV(fileURL: URL = defaultFileURL) -> String {
+        lock.lock()
+        let store = load(fileURL)
+        lock.unlock()
+        var lines = ["date,claude_tokens,claude_cost_usd,codex_tokens,codex_cost_usd,antigravity_prompts,antigravity_cost_usd"]
+        for day in store.keys.sorted() {
+            guard let e = store[day] else { continue }
+            lines.append([
+                day,
+                String(e.claudeTokens), String(format: "%.6f", e.claudeCostUSD),
+                String(e.codexTokens), String(format: "%.6f", e.codexCostUSD),
+                String(e.antigravityPrompts), String(format: "%.6f", e.antigravityCostUSD),
+            ].joined(separator: ","))
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
 }

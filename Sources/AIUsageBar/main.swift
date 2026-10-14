@@ -178,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onExportJSON: { [weak self] in self?.copyUsageJSON() },
             onExportCSV: { [weak self] in self?.copyUsageCSV() },
             onSaveCSV: { [weak self] in self?.saveUsageCSV() },
+            onSaveDailyHistoryCSV: { [weak self] in self?.saveDailyHistoryCSV() },
             onSettings: { [weak self] in self?.settingsClicked() },
             onQuit: { [weak self] in self?.quitClicked() }
         )
@@ -239,6 +240,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 appLog("exported CSV usage report to \(url.lastPathComponent)")
             } catch {
                 appLog("CSV export failed — \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func saveDailyHistoryCSV() {
+        let panel = NSSavePanel()
+        panel.title = "Export Daily History CSV"
+        panel.nameFieldStringValue = "ai-usage-daily-history-\(Date().formatted(.dateTime.year().month().day())).csv"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try DailyHistoryStore.generateCSV().write(to: url, atomically: true, encoding: .utf8)
+                appLog("exported daily history CSV to \(url.lastPathComponent)")
+            } catch {
+                appLog("daily history CSV export failed — \(error.localizedDescription)")
             }
         }
     }
