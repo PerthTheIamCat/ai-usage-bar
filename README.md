@@ -44,12 +44,15 @@ own.
 ## Install and use
 
 1. Open the [Releases](https://github.com/PerthTheIamCat/ai-usage-bar/releases)
-   page and download the `macos-arm64.zip` file.
-2. Double-click the ZIP, then move `AIUsageBar.app` to `/Applications` if you
-   want to keep it there.
-3. Open `AIUsageBar.app`.
-   - Current preview builds use ad-hoc signing. If macOS blocks the first
-     launch, Control-click the app, choose **Open**, then confirm **Open**.
+   page and download the `macos-arm64.dmg` file.
+2. Open the disk image and drag `AIUsageBar.app` onto the **Applications**
+   shortcut.
+3. Open `AIUsageBar.app` from Applications.
+   - If the release is not Developer ID signed and notarized, macOS may block
+     the first launch: Control-click the app, choose **Open**, then confirm
+     **Open**.
+   - The `macos-arm64.zip` is still published; it is what the in-app updater
+     uses, and it works for a manual install too.
 4. Claude reads work differently depending on how you use Claude:
    - **Claude Desktop app** — nothing to configure. AI Usage Bar reads its
      local plan-usage file directly; open the popover after using Claude once
@@ -157,8 +160,10 @@ loading phase while that background work runs.
   fit from your own recent readings, not a published formula — early on, or
   right after a long idle stretch, there may not be enough recent signal for
   either to say anything yet.
-- Preview releases are not yet Developer ID signed or notarized. The first
-  install may still need the Control-click → **Open** step above.
+- Releases are Developer ID signed and notarized only when the maintainer has
+  configured the Apple signing secrets for the release workflow; otherwise they
+  are ad-hoc signed and the first install needs the Control-click → **Open**
+  step above.
 - **Updating from a version before 0.10.0**: the app's bundle identifier
   changed (a macOS-side issue was preventing some installs from ever getting
   a menu bar icon at all — see the 0.10.0 release notes). The in-app updater

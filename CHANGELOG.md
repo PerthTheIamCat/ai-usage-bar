@@ -4,6 +4,11 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Disk image installer:** Releases now include a `.dmg` with a drag-to-Applications shortcut alongside the ZIP.
+- **Notarized releases:** The release workflow signs with Developer ID and notarizes the app and disk image when Apple signing secrets are configured.
+
 ## [0.13.0] - 2026-09-06
 
 ### Added

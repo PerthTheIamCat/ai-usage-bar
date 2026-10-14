@@ -76,8 +76,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK/Versions/B/Autoupdate"
-codesign --force --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK/Versions/B/Updater.app"
-codesign --force --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK"
-codesign --force --sign "$CODESIGN_IDENTITY" "$APP"
+# Notarization requires the hardened runtime and a secure timestamp, which only
+# make sense with a real (Developer ID) identity — not ad-hoc or self-signed.
+SIGN_FLAGS=(--force)
+if [[ "$CODESIGN_IDENTITY" == Developer\ ID* ]]; then
+  SIGN_FLAGS+=(--options runtime --timestamp)
+fi
+codesign "${SIGN_FLAGS[@]}" --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK/Versions/B/Autoupdate"
+codesign "${SIGN_FLAGS[@]}" --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK/Versions/B/Updater.app"
+codesign "${SIGN_FLAGS[@]}" --sign "$CODESIGN_IDENTITY" "$SPARKLE_APP_FRAMEWORK"
+codesign "${SIGN_FLAGS[@]}" --sign "$CODESIGN_IDENTITY" "$APP"
 echo "Built $PWD/$APP"
