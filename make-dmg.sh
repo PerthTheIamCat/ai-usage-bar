@@ -39,8 +39,8 @@ tell application "Finder"
     set icon size of opts to 112
     set text size of opts to 13
     set background picture of opts to file ".background:background.tiff"
-    set position of item "AIUsageBar.app" of container window to {170, 215}
-    set position of item "Applications" of container window to {490, 215}
+    set position of item "AIUsageBar.app" of container window to {170, 190}
+    set position of item "Applications" of container window to {490, 190}
     update without registering applications
     delay 1
     close
