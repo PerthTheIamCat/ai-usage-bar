@@ -9,6 +9,10 @@ All notable changes to AI Usage Bar are documented in this file.
 - **Disk image installer:** Releases now include a `.dmg` with a drag-to-Applications shortcut alongside the ZIP.
 - **Notarized releases:** The release workflow signs with Developer ID and notarizes the app and disk image when Apple signing secrets are configured.
 
+### Fixed
+
+- **Window-reset hint:** A rolled-over Codex or Antigravity limit now tells you to use that tool for a fresh reading instead of always pointing at Claude.
+
 ## [0.13.0] - 2026-09-06
 
 ### Added
