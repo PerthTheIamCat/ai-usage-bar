@@ -1132,6 +1132,7 @@ struct PopoverFooter: View {
     let onExportJSON: () -> Void
     let onExportCSV: () -> Void
     let onSaveCSV: () -> Void
+    let onSaveDailyHistoryCSV: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
@@ -1187,6 +1188,7 @@ struct PopoverFooter: View {
                     Button("Copy CSV") { copy(onExportCSV) }
                     Divider()
                     Button("Save CSV…", action: onSaveCSV)
+                    Button("Save daily history CSV…", action: onSaveDailyHistoryCSV)
                 } label: {
                     Label(justCopied ? "Copied!" : "Export…", systemImage: "square.and.arrow.up")
                 }
@@ -1214,6 +1216,7 @@ struct PopoverContentView: View {
     let onExportJSON: () -> Void
     let onExportCSV: () -> Void
     let onSaveCSV: () -> Void
+    let onSaveDailyHistoryCSV: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
@@ -1222,6 +1225,7 @@ struct PopoverContentView: View {
         onRefresh: @escaping () -> Void, onCheckForUpdates: @escaping () -> Void,
         onExportReport: @escaping () -> Void, onExportJSON: @escaping () -> Void,
         onExportCSV: @escaping () -> Void, onSaveCSV: @escaping () -> Void,
+        onSaveDailyHistoryCSV: @escaping () -> Void,
         onSettings: @escaping () -> Void, onQuit: @escaping () -> Void
     ) {
         self.viewModel = viewModel
@@ -1232,6 +1236,7 @@ struct PopoverContentView: View {
         self.onExportJSON = onExportJSON
         self.onExportCSV = onExportCSV
         self.onSaveCSV = onSaveCSV
+        self.onSaveDailyHistoryCSV = onSaveDailyHistoryCSV
         self.onSettings = onSettings
         self.onQuit = onQuit
         if CommandLine.arguments.contains("--antigravity") {
@@ -1281,7 +1286,7 @@ struct PopoverContentView: View {
                     }
                 }
                 .frame(maxHeight: .infinity)
-                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onExportJSON: onExportJSON, onExportCSV: onExportCSV, onSaveCSV: onSaveCSV, onSettings: onSettings, onQuit: onQuit)
+                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onExportJSON: onExportJSON, onExportCSV: onExportCSV, onSaveCSV: onSaveCSV, onSaveDailyHistoryCSV: onSaveDailyHistoryCSV, onSettings: onSettings, onQuit: onQuit)
             }
             .frame(width: 380)
         }
