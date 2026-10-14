@@ -5,6 +5,9 @@ import AppKit
 extension Notification.Name {
     /// Posted whenever a setting changes so the status item re-renders.
     static let usageSettingsChanged = Notification.Name("usageSettingsChanged")
+    /// Posted when the list of extra accounts changes, so the app reads the
+    /// new account right away instead of waiting for the next refresh tick.
+    static let usageAccountsChanged = Notification.Name("usageAccountsChanged")
 }
 
 /// How percentages are presented everywhere (menu-bar title, menu rows, bars).
@@ -40,6 +43,11 @@ enum LimitStyle: String, CaseIterable, Identifiable {
     case barAndPercent
     case ringAndPercent
     case dotAndPercent
+    case blocks
+    case blocksAndPercent
+    case battery
+    case batteryAndPercent
+    case pill
 
     var id: String { rawValue }
 
@@ -51,6 +59,11 @@ enum LimitStyle: String, CaseIterable, Identifiable {
         case .barAndPercent: return "Bar + percent"
         case .ringAndPercent: return "Ring + percent"
         case .dotAndPercent: return "Dot + percent"
+        case .blocks: return "Blocks"
+        case .blocksAndPercent: return "Blocks + percent"
+        case .battery: return "Battery"
+        case .batteryAndPercent: return "Battery + percent"
+        case .pill: return "Pill"
         }
     }
 
@@ -58,8 +71,9 @@ enum LimitStyle: String, CaseIterable, Identifiable {
 
     var showsPercent: Bool {
         switch self {
-        case .percentOnly, .barAndPercent, .ringAndPercent, .dotAndPercent: return true
-        case .bar, .ring: return false
+        case .percentOnly, .barAndPercent, .ringAndPercent, .dotAndPercent,
+             .blocksAndPercent, .batteryAndPercent: return true
+        case .bar, .ring, .blocks, .battery, .pill: return false
         }
     }
 }
@@ -164,6 +178,7 @@ final class AppSettings: ObservableObject {
     private enum Keys {
         static let displayMode = "displayMode"
         static let warnBelowRemaining = "warnBelowRemaining"
+        static let warnBelowOverrides = "warnBelowOverrides"
         static let showFiveHourInMenuBar = "showFiveHourInMenuBar"
         static let showWeeklyInMenuBar = "showWeeklyInMenuBar"
         static let thbPerUSD = "thbPerUSD"
@@ -190,6 +205,44 @@ final class AppSettings: ObservableObject {
         static let showSessionWorkspace = "showSessionWorkspace"
         static let sessionAlertEnabled = "sessionAlertEnabled"
         static let sessionAlertThreshold = "sessionAlertThreshold"
+        static let touchBarEnabled = "touchBarEnabled"
+        static let forceTouchBarSupport = "forceTouchBarSupport"
+        static let extraAccounts = "extraAccounts"
+    }
+
+    /// Additional Claude / Codex accounts, each read from its own config
+    /// directory. The default account is always read and is not listed here.
+    @Published var extraAccounts: [ExtraAccount] {
+        didSet {
+            if let data = try? JSONEncoder().encode(extraAccounts) {
+                UserDefaults.standard.set(data, forKey: Keys.extraAccounts)
+            }
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+            NotificationCenter.default.post(name: .usageAccountsChanged, object: nil)
+        }
+    }
+
+    func addAccount(provider: ProviderKind, name: String, path: String) {
+        let id = ExtraAccount.makeID(provider: provider, name: name, existing: Set(extraAccounts.map(\.id)))
+        extraAccounts.append(ExtraAccount(id: id, provider: provider, name: name, path: path))
+    }
+
+    func removeAccount(id: String) {
+        extraAccounts.removeAll { $0.id == id }
+    }
+
+    @Published var touchBarEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(touchBarEnabled, forKey: Keys.touchBarEnabled)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var forceTouchBarSupport: Bool {
+        didSet {
+            UserDefaults.standard.set(forceTouchBarSupport, forKey: Keys.forceTouchBarSupport)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
     }
 
     @Published var displayMode: UsageDisplayMode {
@@ -206,6 +259,34 @@ final class AppSettings: ObservableObject {
             UserDefaults.standard.set(warnBelowRemaining, forKey: Keys.warnBelowRemaining)
             NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
         }
+    }
+
+    /// Per-window overrides of `warnBelowRemaining`, keyed
+    /// "<provider>.<window>". A window with no entry follows the global value.
+    @Published var warnBelowOverrides: [String: Double] {
+        didSet {
+            UserDefaults.standard.set(warnBelowOverrides, forKey: Keys.warnBelowOverrides)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    private static func warnKey(_ provider: ProviderKind, _ window: LimitWindowKind) -> String {
+        "\(provider.rawValue).\(window.rawValue)"
+    }
+
+    /// Remaining-percent threshold below which this window turns red and
+    /// notifies: its own override if set, otherwise the global value.
+    func warnBelow(_ provider: ProviderKind, _ window: LimitWindowKind) -> Double {
+        warnBelowOverrides[Self.warnKey(provider, window)] ?? warnBelowRemaining
+    }
+
+    func warnBelowOverride(_ provider: ProviderKind, _ window: LimitWindowKind) -> Double? {
+        warnBelowOverrides[Self.warnKey(provider, window)]
+    }
+
+    /// `nil` clears the override so the window follows the global value again.
+    func setWarnBelowOverride(_ value: Double?, _ provider: ProviderKind, _ window: LimitWindowKind) {
+        warnBelowOverrides[Self.warnKey(provider, window)] = value
     }
 
     /// Which Claude windows are shown at all — both in the menu-bar title
@@ -532,6 +613,7 @@ final class AppSettings: ObservableObject {
         displayMode = UsageDisplayMode(rawValue: d.string(forKey: Keys.displayMode) ?? "") ?? .used
         let stored = d.double(forKey: Keys.warnBelowRemaining)
         warnBelowRemaining = stored > 0 ? stored : 20
+        warnBelowOverrides = (d.dictionary(forKey: Keys.warnBelowOverrides) as? [String: Double]) ?? [:]
         let legacyShowFiveHour = d.object(forKey: Keys.showFiveHourInMenuBar) as? Bool ?? true
         let legacyShowWeekly = d.object(forKey: Keys.showWeeklyInMenuBar) as? Bool ?? true
         showFiveHourInMenuBar = legacyShowFiveHour
@@ -619,5 +701,9 @@ final class AppSettings: ObservableObject {
         sessionAlertEnabled = d.object(forKey: Keys.sessionAlertEnabled) as? Bool ?? false
         let storedSessionThreshold = d.double(forKey: Keys.sessionAlertThreshold)
         sessionAlertThreshold = storedSessionThreshold > 0 ? storedSessionThreshold : 5_000_000
+        touchBarEnabled = d.object(forKey: Keys.touchBarEnabled) as? Bool ?? false
+        forceTouchBarSupport = d.object(forKey: Keys.forceTouchBarSupport) as? Bool ?? false
+        extraAccounts = (d.data(forKey: Keys.extraAccounts))
+            .flatMap { try? JSONDecoder().decode([ExtraAccount].self, from: $0) } ?? []
     }
 }

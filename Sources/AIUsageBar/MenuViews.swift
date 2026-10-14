@@ -9,9 +9,10 @@ enum MenuMetrics {
 }
 
 /// Traffic-light color for a remaining-capacity percentage. The red threshold
-/// follows the user's warning setting; orange covers the band above it.
-func limitColor(_ remainingPercent: Double) -> NSColor {
-    if remainingPercent < AppSettings.shared.warnBelowRemaining { return .systemRed }
+/// follows the user's warning setting (or the given per-window `warnBelow`
+/// override); orange covers the band above it.
+func limitColor(_ remainingPercent: Double, warnBelow: Double? = nil) -> NSColor {
+    if remainingPercent < (warnBelow ?? AppSettings.shared.warnBelowRemaining) { return .systemRed }
     if remainingPercent < 50 { return .systemOrange }
     return .systemGreen
 }
@@ -55,6 +56,15 @@ private enum MenuBarMeterPalette {
             return NSColor.white.withAlphaComponent(0.88)
         default:
             return NSColor.black.withAlphaComponent(0.84)
+        }
+    }
+
+    static let textOnFill = NSColor(name: "AIUsageBarMeterTextOnFill") { appearance in
+        switch appearance.bestMatch(from: [.aqua, .darkAqua]) {
+        case .darkAqua:
+            return NSColor(calibratedWhite: 0.08, alpha: 0.95)
+        default:
+            return NSColor.white.withAlphaComponent(0.96)
         }
     }
 }
@@ -119,9 +129,10 @@ func drawDotMeter(in rect: NSRect, remainingPercent: Double, color: NSColor) {
 /// tracks how close the limit is. Hosted via `NSViewRepresentable`.
 final class LimitBarView: NSView {
     var remainingPercent: Double = 0 { didSet { needsDisplay = true } }
+    var warnBelow: Double? { didSet { needsDisplay = true } }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawCapsuleMeter(in: bounds, remainingPercent: remainingPercent, color: limitColor(remainingPercent))
+        drawCapsuleMeter(in: bounds, remainingPercent: remainingPercent, color: limitColor(remainingPercent, warnBelow: warnBelow))
     }
 }
 
@@ -129,6 +140,8 @@ final class LimitBarView: NSView {
 struct MenuBarWindow {
     let kind: LimitWindowKind
     let remainingPercent: Double?
+    /// Per-window red threshold; nil follows the `warnBelow` passed to `MiniMeter`.
+    var warnBelow: Double? = nil
 
     var label: String { kind == .fiveHour ? "5h" : "W" }
     var validRemaining: Double? {
@@ -145,9 +158,27 @@ enum MiniMeter {
         let height: CGFloat = 20
         let isSingleRow = windows.count == 1
         let rowHeight: CGFloat = isSingleRow ? height : 10
-        let barHeight: CGFloat = isSingleRow ? 8 : 6
         let isRing = style == .ring || style == .ringAndPercent
-        let meterWidth: CGFloat = !style.showsMeter ? 0 : (isRing ? 20 : (style == .dotAndPercent ? (isSingleRow ? 8 : 6) : (isSingleRow ? 34 : 28)))
+        let isBattery = style == .battery || style == .batteryAndPercent
+        let isBlocks = style == .blocks || style == .blocksAndPercent
+        let isPill = style == .pill
+        let barHeight: CGFloat = isPill ? (isSingleRow ? 12 : 9) : (isSingleRow ? 8 : 6)
+        let meterWidth: CGFloat
+        if !style.showsMeter {
+            meterWidth = 0
+        } else if isRing {
+            meterWidth = 20
+        } else if style == .dotAndPercent {
+            meterWidth = isSingleRow ? 8 : 6
+        } else if isBattery {
+            meterWidth = isSingleRow ? 24 : 20
+        } else if isBlocks {
+            meterWidth = isSingleRow ? 30 : 24
+        } else if isPill {
+            meterWidth = isSingleRow ? 36 : 32
+        } else {
+            meterWidth = isSingleRow ? 34 : 28
+        }
         let labelsWidth: CGFloat = (!isRing || style.showsPercent) ? 15 : 0
         let numberFont = NSFont.monospacedDigitSystemFont(ofSize: isSingleRow ? 10 : 9, weight: .regular)
         let numberWidth = ceil(("100%" as NSString).size(withAttributes: [.font: numberFont]).width)
@@ -157,7 +188,7 @@ enum MiniMeter {
         return NSImage(size: size, flipped: false) { _ in
             for (index, window) in windows.enumerated() {
                 let remaining = window.validRemaining
-                let color: NSColor = remaining.map { $0 < warnBelow ? .systemRed : MenuBarMeterPalette.fill } ?? MenuBarMeterPalette.secondaryLabel
+                let color: NSColor = remaining.map { $0 < (window.warnBelow ?? warnBelow) ? .systemRed : MenuBarMeterPalette.fill } ?? MenuBarMeterPalette.secondaryLabel
                 let fraction = remaining.map { (mode == .used ? 100 - $0 : $0) / 100 }
                 let y = height - CGFloat(index + 1) * rowHeight
                 let trackColor: NSColor = remaining == nil ? MenuBarMeterPalette.track.withAlphaComponent(0.45) : MenuBarMeterPalette.track
@@ -183,6 +214,97 @@ enum MiniMeter {
                             arc.lineCapStyle = .round
                             arc.stroke()
                         }
+                    }
+                } else if isBlocks {
+                    let rect = NSRect(x: 0, y: y + (rowHeight - barHeight) / 2, width: meterWidth, height: barHeight)
+                    let blockCount = 4
+                    let spacing: CGFloat = 1.5
+                    let blockWidth = (meterWidth - CGFloat(blockCount - 1) * spacing) / CGFloat(blockCount)
+                    let activeBlocks: Int
+                    if let fraction {
+                        activeBlocks = fraction > 0 ? max(1, Int((fraction * Double(blockCount)).rounded())) : 0
+                    } else {
+                        activeBlocks = 0
+                    }
+                    for b in 0..<blockCount {
+                        let bx = rect.minX + CGFloat(b) * (blockWidth + spacing)
+                        let bRect = NSRect(x: bx, y: rect.minY, width: blockWidth, height: barHeight)
+                        if remaining == nil {
+                            trackColor.withAlphaComponent(0.45).setFill()
+                        } else if b < activeBlocks {
+                            color.setFill()
+                        } else {
+                            trackColor.setFill()
+                        }
+                        NSBezierPath(roundedRect: bRect, xRadius: 1.0, yRadius: 1.0).fill()
+                    }
+                } else if isBattery {
+                    let rect = NSRect(x: 0, y: y + (rowHeight - barHeight) / 2, width: meterWidth, height: barHeight)
+                    let bodyWidth = meterWidth - 3.0
+                    let bodyRect = NSRect(x: rect.minX, y: rect.minY, width: bodyWidth, height: barHeight)
+                    let termHeight = max(2.5, barHeight * 0.45)
+                    let termRect = NSRect(x: rect.minX + bodyWidth + 0.5, y: rect.minY + (barHeight - termHeight) / 2,
+                                          width: 2.0, height: termHeight)
+
+                    trackColor.setFill()
+                    NSBezierPath(roundedRect: bodyRect, xRadius: 1.5, yRadius: 1.5).fill()
+                    NSBezierPath(roundedRect: termRect, xRadius: 0.75, yRadius: 0.75).fill()
+
+                    if let fraction, fraction > 0 {
+                        color.setFill()
+                        let innerRect = bodyRect.insetBy(dx: 1.0, dy: 1.0)
+                        let fillW = max(1.0, innerRect.width * CGFloat(fraction))
+                        let fillRect = NSRect(x: innerRect.minX, y: innerRect.minY, width: fillW, height: innerRect.height)
+                        NSGraphicsContext.saveGraphicsState()
+                        NSBezierPath(roundedRect: innerRect, xRadius: 1.0, yRadius: 1.0).addClip()
+                        NSBezierPath(rect: fillRect).fill()
+                        NSGraphicsContext.restoreGraphicsState()
+                        if fraction >= 0.95 {
+                            NSBezierPath(roundedRect: termRect, xRadius: 0.75, yRadius: 0.75).fill()
+                        }
+                    }
+                } else if isPill {
+                    let rect = NSRect(x: 0, y: y + (rowHeight - barHeight) / 2, width: meterWidth, height: barHeight)
+                    let radius = barHeight / 2
+                    trackColor.setFill()
+                    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+
+                    let pillFont = NSFont.monospacedDigitSystemFont(ofSize: isSingleRow ? 9 : 7.5, weight: .bold)
+                    let text = remaining.map { mode.shortText(remaining: $0) } ?? "—"
+                    let paragraph = NSMutableParagraphStyle()
+                    paragraph.alignment = .center
+                    paragraph.lineBreakMode = .byClipping
+                    let strAttrs: [NSAttributedString.Key: Any] = [
+                        .font: pillFont,
+                        .paragraphStyle: paragraph
+                    ]
+                    let textSize = (text as NSString).size(withAttributes: strAttrs)
+                    let textRect = NSRect(x: rect.minX, y: rect.minY + (barHeight - textSize.height) / 2, width: rect.width, height: textSize.height)
+
+                    if let fraction, fraction > 0 {
+                        let fillWidth = max(0, min(rect.width, rect.width * CGFloat(fraction)))
+                        let fillSlice = NSRect(x: rect.minX, y: rect.minY, width: fillWidth, height: barHeight)
+
+                        // 1. Fill the bar portion
+                        NSGraphicsContext.saveGraphicsState()
+                        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
+                        NSBezierPath(rect: fillSlice).addClip()
+                        color.setFill()
+                        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+                        NSGraphicsContext.restoreGraphicsState()
+
+                        // 2. Draw text over unfilled track portion
+                        drawText(text, in: textRect, font: pillFont, color: MenuBarMeterPalette.secondaryLabel, alignment: .center)
+
+                        // 3. Draw inverted contrast text clipped precisely to filled slice
+                        let textOnFillColor = (color == .systemRed) ? NSColor.white.withAlphaComponent(0.96) : MenuBarMeterPalette.textOnFill
+                        NSGraphicsContext.saveGraphicsState()
+                        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
+                        NSBezierPath(rect: fillSlice).addClip()
+                        drawText(text, in: textRect, font: pillFont, color: textOnFillColor, alignment: .center)
+                        NSGraphicsContext.restoreGraphicsState()
+                    } else {
+                        drawText(text, in: textRect, font: pillFont, color: MenuBarMeterPalette.secondaryLabel, alignment: .center)
                     }
                 } else if style.showsMeter {
                     let rect = NSRect(x: 0, y: y + (rowHeight - barHeight) / 2, width: meterWidth, height: barHeight)

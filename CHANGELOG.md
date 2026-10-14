@@ -6,12 +6,27 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ### Added
 
-- **Disk image installer:** Releases now include a `.dmg` with a drag-to-Applications shortcut alongside the ZIP.
+- **Multiple accounts:** Settings → Accounts adds extra Claude Code and Codex accounts, each read from its own config folder (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). Each shows its own limits and today's usage under "Other accounts" in the popover. Extra Claude accounts get their own status-line bridge from the same tab.
 - **Notarized releases:** The release workflow signs with Developer ID and notarizes the app and disk image when Apple signing secrets are configured.
 
 ### Fixed
 
 - **Window-reset hint:** A rolled-over Codex or Antigravity limit now tells you to use that tool for a fresh reading instead of always pointing at Claude.
+- **Wrong "hits the limit" time:** Antigravity model groups (Gemini, Claude/GPT) no longer share one pace history, so a quiet group can't inherit another's projection. Pace is also ignored when it disagrees with the percentage on screen, the reading is stale, or the climb is negligible.
+- **Reset time:** every limit row now shows the actual reset clock time next to "resets in", and the pace warning no longer hides it.
+
+## [0.14.0] - 2026-10-13
+
+### Added
+
+- **New display styles:** Added Blocks, Battery, and Pill meter styles with compact visual representations for the menu bar.
+- **Touch Bar support:** Added hardware detection and optional live usage display in the macOS Control Strip for supported MacBook models.
+- **Antigravity model groups:** Full live quota tracking for Gemini Models and Claude/GPT models via Desktop IDE Connect RPC and CLI status-line bridge.
+
+### Fixed
+
+- **Pill contrast and clipping:** Implemented two-tone inverted contrast clipping so percentage numbers remain clearly legible across filled and unfilled portions.
+- **Antigravity popover layout:** Standardized Antigravity limit rows to use horizontal capsule bars matching Claude Code and Codex styles.
 
 ## [0.13.0] - 2026-09-06
 

@@ -94,4 +94,51 @@ final class DailyHistoryStoreTests: XCTestCase {
         XCTAssertEqual(result.claudeTokens[0], 1000, "first recorded day should survive a later, unrelated record() call")
         XCTAssertEqual(result.claudeTokens[1], 2000, "second recorded day should also survive")
     }
+
+    func testExtendedTrendReachesBeyondLiveWindowAndLiveDataWins() {
+        // 10 days of history on disk, the live scan only sees the last 3.
+        DailyHistoryStore.record(trend(days: 10, activeIndex: 0, claudeTokens: 4000), fileURL: fileURL)
+        DailyHistoryStore.record(trend(days: 10, activeIndex: 9, claudeTokens: 111), fileURL: fileURL)
+
+        let live = trend(days: 3, activeIndex: 2, claudeTokens: 999)
+        let result = DailyHistoryStore.extendedTrend(days: 10, live: live, fileURL: fileURL)
+
+        XCTAssertEqual(result.days.count, 10)
+        XCTAssertEqual(result.claudeTokens[0], 4000, "old day beyond the live window comes from the store")
+        XCTAssertEqual(result.claudeTokens[9], 999, "live data wins over the stored value for today")
+    }
+
+    func testExtendedTrendAllSpansFromEarliestRecordedDay() {
+        DailyHistoryStore.record(trend(days: 12, activeIndex: 0, claudeTokens: 50), fileURL: fileURL)
+
+        let result = DailyHistoryStore.extendedTrend(days: nil, live: trend(days: 3), fileURL: fileURL)
+
+        XCTAssertEqual(result.days.count, 12)
+        XCTAssertEqual(result.claudeTokens[0], 50)
+    }
+
+    func testExtendedTrendAllWithNoHistoryFallsBackToLiveLength() {
+        let result = DailyHistoryStore.extendedTrend(days: nil, live: trend(days: 3), fileURL: fileURL)
+        XCTAssertEqual(result.days.count, 3)
+    }
+
+    func testGenerateCSVEmitsOneSortedRowPerRecordedDay() {
+        DailyHistoryStore.record(trend(days: 3, activeIndex: 1, claudeTokens: 2000, claudeCostUSD: 1.5), fileURL: fileURL)
+        DailyHistoryStore.record(trend(days: 3, activeIndex: 0, claudeTokens: 1000, claudeCostUSD: 0.25), fileURL: fileURL)
+
+        let lines = DailyHistoryStore.generateCSV(fileURL: fileURL)
+            .split(separator: "\n").map(String.init)
+
+        XCTAssertEqual(lines.count, 3, "header plus one row per recorded day")
+        XCTAssertEqual(lines[0], "date,claude_tokens,claude_cost_usd,codex_tokens,codex_cost_usd,antigravity_prompts,antigravity_cost_usd")
+        XCTAssertTrue(lines[1].hasSuffix(",1000,0.250000,0,0.000000,0,0.000000"), lines[1])
+        XCTAssertTrue(lines[2].hasSuffix(",2000,1.500000,0,0.000000,0,0.000000"), lines[2])
+        XCTAssertLessThan(lines[1].prefix(10), lines[2].prefix(10), "rows should be oldest first")
+    }
+
+    func testGenerateCSVWithNoHistoryIsHeaderOnly() {
+        let lines = DailyHistoryStore.generateCSV(fileURL: fileURL)
+            .split(separator: "\n")
+        XCTAssertEqual(lines.count, 1)
+    }
 }

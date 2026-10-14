@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Create versioned, Apple Silicon release assets (.zip for the Sparkle updater,
-# .dmg for first-time installs) from the Swift package.
+# Create versioned, Apple Silicon release assets (.dmg, used for both
+# first-time installs and the Sparkle updater) from the Swift package.
 #
 # When NOTARY_KEYCHAIN_PROFILE is set (a `notarytool store-credentials`
 # profile) the app and the disk image are submitted to Apple's notary service
@@ -14,7 +14,6 @@ VERSION="${1:?Usage: ./make-release.sh <version> [build-number]}"
 BUILD_NUMBER="${2:-1}"
 ARCH="$(uname -m)"
 BASE="AIUsageBar-v${VERSION}-macos-${ARCH}"
-ASSET="$BASE.zip"
 DMG="$BASE.dmg"
 
 notarize() {
@@ -30,14 +29,11 @@ if [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
   xcrun stapler staple AIUsageBar.app
 fi
 
-rm -f "$ASSET" "$ASSET.sha256" "$DMG" "$DMG.sha256"
-ditto -c -k --keepParent AIUsageBar.app "$ASSET"
-shasum -a 256 "$ASSET" > "$ASSET.sha256"
-
+rm -f "$DMG" "$DMG.sha256"
 ./make-dmg.sh "$DMG"
 if [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
   notarize "$DMG"
   xcrun stapler staple "$DMG"
 fi
 shasum -a 256 "$DMG" > "$DMG.sha256"
-echo "Built $PWD/$ASSET and $PWD/$DMG"
+echo "Built $PWD/$DMG"

@@ -10,6 +10,14 @@ enum ClaudeLimitsReader {
             .appendingPathComponent("claude-statusline.json")
     }()
 
+    /// Snapshot written by an extra account's status-line bridge, or nil when
+    /// `accountID` could not safely name a file.
+    static func accountSnapshotURL(accountID: String) -> URL? {
+        guard ExtraAccount.isValidID(accountID) else { return nil }
+        return statusLineSnapshotURL.deletingLastPathComponent()
+            .appendingPathComponent("claude-statusline-\(accountID).json")
+    }
+
     /// The Claude Desktop app (not Claude Code) writes its own local plan-
     /// usage samples here. The statusLine bridge only fires from Claude Code
     /// CLI sessions, so people who only use the Desktop app would otherwise
@@ -36,11 +44,19 @@ enum ClaudeLimitsReader {
         var recentSamples: [(at: Date, fiveHourUsed: Double)] = []
     }
 
-    static func fetch() -> ClaudeLimits {
+    /// `accountID` reads only that extra account's status-line snapshot; the
+    /// Desktop app history belongs to the default account.
+    static func fetch(accountID: String? = nil) -> ClaudeLimits {
         // Prefer whichever local source has the freshest reading — a person
         // may use both the CLI and the Desktop app, and either can go quiet
         // while the other keeps updating.
-        let candidates = [readStoredStatusLine(), readDesktopPlanUsage()].compactMap { $0 }
+        let candidates: [StoredStatusLine]
+        if let accountID {
+            candidates = accountSnapshotURL(accountID: accountID)
+                .flatMap { readStoredStatusLine(at: $0) }.map { [$0] } ?? []
+        } else {
+            candidates = [readStoredStatusLine(), readDesktopPlanUsage()].compactMap { $0 }
+        }
         guard let stored = candidates.max(by: { $0.observedAt < $1.observedAt }) else {
             logStatus(state: "unavailable", observedAt: nil, fiveHour: nil, weekly: nil,
                       message: "claude: no local statusline or Desktop-app snapshot found — configure the Claude Code bridge")
@@ -90,7 +106,7 @@ enum ClaudeLimitsReader {
     /// Entry point used by the Claude Code status-line command. Store only
     /// rate-limit data, not the rest of Claude Code's session metadata.
     @discardableResult
-    static func captureStatusLineInput(_ data: Data) -> String {
+    static func captureStatusLineInput(_ data: Data, accountID: String? = nil) -> String {
         guard let input = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rateLimits = input["rate_limits"] as? [String: Any],
               rateLimits["five_hour"] is [String: Any] || rateLimits["seven_day"] is [String: Any]
@@ -102,11 +118,12 @@ enum ClaudeLimitsReader {
             "observed_at": Date().timeIntervalSince1970,
             "rate_limits": rateLimits,
         ]
+        let target = accountID.flatMap { accountSnapshotURL(accountID: $0) } ?? statusLineSnapshotURL
         if let encoded = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) {
             do {
-                let directory = statusLineSnapshotURL.deletingLastPathComponent()
+                let directory = target.deletingLastPathComponent()
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try encoded.write(to: statusLineSnapshotURL, options: .atomic)
+                try encoded.write(to: target, options: .atomic)
             } catch {
                 // Keep the status line useful even if the local snapshot cannot
                 // be written; the menu-bar app will show the last good file.
@@ -115,8 +132,8 @@ enum ClaudeLimitsReader {
         return statusLineText(rateLimits)
     }
 
-    private static func readStoredStatusLine() -> StoredStatusLine? {
-        guard let data = try? Data(contentsOf: statusLineSnapshotURL),
+    private static func readStoredStatusLine(at url: URL = statusLineSnapshotURL) -> StoredStatusLine? {
+        guard let data = try? Data(contentsOf: url),
               let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let observed = number(record["observed_at"]),
               let rateLimits = record["rate_limits"] as? [String: Any]

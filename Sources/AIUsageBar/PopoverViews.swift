@@ -6,13 +6,16 @@ import AppKit
 
 private struct LimitBarRepresentable: NSViewRepresentable {
     let remainingPercent: Double
+    var warnBelow: Double?
     func makeNSView(context: Context) -> LimitBarView {
         let v = LimitBarView()
         v.remainingPercent = remainingPercent
+        v.warnBelow = warnBelow
         return v
     }
     func updateNSView(_ nsView: LimitBarView, context: Context) {
         nsView.remainingPercent = remainingPercent
+        nsView.warnBelow = warnBelow
     }
 }
 
@@ -52,12 +55,21 @@ private struct RefreshCountdownRepresentable: NSViewRepresentable {
 
 struct CaptionText: View {
     let title: String
+    var info: String? = nil
     var body: some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4)
+        HStack(spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            if let info {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .help(info)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
     }
 }
 
@@ -181,10 +193,16 @@ struct LimitRow: View {
     let window: LimitWindow
     var provider: ProviderKind?
     var windowKind: LimitWindowKind?
+    var group: String?
+
+    private var warnBelow: Double? {
+        guard let provider, let windowKind else { return nil }
+        return AppSettings.shared.warnBelow(provider, windowKind)
+    }
 
     private var forecast: BurnRateTracker.Forecast? {
         guard let provider, let windowKind else { return nil }
-        return BurnRateTracker.forecast(provider, windowKind, resetsAt: window.resetsAt)
+        return BurnRateTracker.forecast(provider, windowKind, resetsAt: window.resetsAt, group: group, currentPercent: window.usedPercent)
     }
 
     var body: some View {
@@ -195,23 +213,27 @@ struct LimitRow: View {
                 Spacer()
                 Text((window.isEstimated ? "~" : "") + AppSettings.shared.displayMode.rowText(remaining: remaining))
                     .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Color(nsColor: limitColor(remaining)))
+                    .foregroundStyle(Color(nsColor: limitColor(remaining, warnBelow: warnBelow)))
             }
-            LimitBarRepresentable(remainingPercent: remaining)
+            LimitBarRepresentable(remainingPercent: remaining, warnBelow: warnBelow)
                 .frame(height: 5)
-            // At the current pace this window will hit 100% before it resets
-            // — the single most-requested thing across every comparable
-            // tool. Takes priority over the plain reset caption because it's
-            // the more actionable fact when it applies.
-            if let forecast = forecast?.willDepleteBeforeReset == true ? forecast : nil {
-                Text("⚠︎ at this pace, hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened)) — before it resets")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.orange)
-            } else if let reset = window.resetsAt {
-                // The Claude Desktop snapshot carries percentages but no
-                // reset time, so this caption used to read "resets in —"
-                // forever. Say something useful or say nothing.
-                Text("resets in \(humanReset(reset))")
+            // The reset caption always shows (with the actual clock time, so
+            // the warning below can't be misread). The Claude Desktop
+            // snapshot carries percentages but no reset time, so that case
+            // falls through to the other captions.
+            if let reset = window.resetsAt {
+                Text("resets in \(humanReset(reset)) · \(resetClock(reset))")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                // At the current pace this window will hit 100% before it
+                // resets — the most actionable fact when it applies.
+                if let forecast = forecast, forecast.willDepleteBeforeReset {
+                    Text("⚠︎ at this pace, hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened)) — before it resets")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.orange)
+                }
+            } else if let desc = window.resetDescription, !desc.isEmpty {
+                Text(desc)
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
             } else if window.isEstimated {
@@ -238,11 +260,11 @@ func freshReadingHint(for provider: ProviderKind?) -> String {
 /// A limit window row, or a "window reset" note in its place once the
 /// stored percentage has rolled past its reset time and is meaningless.
 @ViewBuilder
-func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil) -> some View {
+func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil, group: String? = nil) -> some View {
     if let r = w.resetsAt, r <= Date() {
         NoteText(text: "\(name): window reset — \(freshReadingHint(for: provider))")
     } else {
-        LimitRow(name: name, window: w, provider: provider, windowKind: windowKind)
+        LimitRow(name: name, window: w, provider: provider, windowKind: windowKind, group: group)
     }
 }
 
@@ -298,8 +320,7 @@ struct AntigravityStatusLineSetupPrompt: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if isIDE {
-                NoteText(text: "Antigravity IDE detected. Activity is read from its local conversations.")
-                NoteText(text: "The IDE does not persist quota data in the CLI status-line format yet.")
+                NoteText(text: "Antigravity Desktop app detected. Live quota is queried automatically via its language server when a conversation is active.")
             } else {
                 switch setupState {
                 case .configured:
@@ -339,6 +360,7 @@ struct AntigravityStatusLineSetupPrompt: View {
 private struct MiniLimitRow: View {
     let label: String
     let window: LimitWindow
+    var warnBelow: Double?
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
@@ -347,7 +369,7 @@ private struct MiniLimitRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .frame(width: 46, alignment: .leading)
-            LimitBarRepresentable(remainingPercent: window.remainingPercent)
+            LimitBarRepresentable(remainingPercent: window.remainingPercent, warnBelow: warnBelow)
                 .frame(height: 5)
             // The meter already fills according to the display mode, so the
             // number has to follow it — printing "left" next to a bar drawn
@@ -355,7 +377,7 @@ private struct MiniLimitRow: View {
             // menu bar.
             Text((window.isEstimated ? "~" : "") + settings.displayMode.shortText(remaining: window.remainingPercent))
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Color(nsColor: limitColor(window.remainingPercent)))
+                .foregroundStyle(Color(nsColor: limitColor(window.remainingPercent, warnBelow: warnBelow)))
                 .frame(width: 40, alignment: .trailing)
         }
     }
@@ -374,6 +396,10 @@ private struct ProviderSummaryCard: View {
     let weekly: LimitWindow?
     let problem: String?
     let todayLine: String?
+    /// An extra account's card: it has no detail pane to open and no recorded
+    /// reading history, so it shows no chevron and no depletion forecast (the
+    /// forecast is fit from the default account's readings for this provider).
+    var isAccount = false
     let onTap: () -> Void
 
     private var tightest: LimitWindow? {
@@ -385,8 +411,8 @@ private struct ProviderSummaryCard: View {
     /// weekly window drifts too slowly for a 45-minute pace window to say
     /// anything useful about it.
     private var fiveHourForecast: BurnRateTracker.Forecast? {
-        guard let w = fiveHour else { return nil }
-        return BurnRateTracker.forecast(kind, .fiveHour, resetsAt: w.resetsAt)
+        guard !isAccount, let w = fiveHour else { return nil }
+        return BurnRateTracker.forecast(kind, .fiveHour, resetsAt: w.resetsAt, currentPercent: w.usedPercent)
     }
 
     var body: some View {
@@ -400,9 +426,11 @@ private struct ProviderSummaryCard: View {
                         .foregroundStyle(iconTint ?? Color.primary)
                     Text(title).font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                    if !isAccount {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
 
                 if let problem {
@@ -411,8 +439,8 @@ private struct ProviderSummaryCard: View {
                     NoteText(text: "No limit data yet")
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
-                        if let w = fiveHour { MiniLimitRow(label: "5-hour", window: w) }
-                        if let w = weekly { MiniLimitRow(label: "Weekly", window: w) }
+                        if let w = fiveHour { MiniLimitRow(label: "5-hour", window: w, warnBelow: AppSettings.shared.warnBelow(kind, .fiveHour)) }
+                        if let w = weekly { MiniLimitRow(label: "Weekly", window: w, warnBelow: AppSettings.shared.warnBelow(kind, .weekly)) }
                     }
                     if let forecast = fiveHourForecast, forecast.willDepleteBeforeReset {
                         Text("⚠︎ 5-hour hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened))")
@@ -433,7 +461,7 @@ private struct ProviderSummaryCard: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .panelSurface(cornerRadius: 10, interactive: true)
+            .panelSurface(cornerRadius: 10, interactive: !isAccount)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -446,6 +474,7 @@ private struct HeroRemainingCard: View {
     let providerTitle: String
     let windowLabel: String
     let window: LimitWindow
+    var warnBelow: Double?
     @ObservedObject private var settings = AppSettings.shared
 
     /// The window shown is the same either way — it is the tightest one. Only
@@ -462,7 +491,7 @@ private struct HeroRemainingCard: View {
                     .stroke(Color.secondary.opacity(0.15), lineWidth: 7)
                 Circle()
                     .trim(from: 0, to: max(0.003, shownFraction))
-                    .stroke(Color(nsColor: limitColor(window.remainingPercent)),
+                    .stroke(Color(nsColor: limitColor(window.remainingPercent, warnBelow: warnBelow)),
                             style: StrokeStyle(lineWidth: 7, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Text(settings.displayMode.shortText(remaining: window.remainingPercent))
@@ -531,6 +560,10 @@ struct OverviewPane: View {
         let weekly: LimitWindow?
         let problem: String?
         let todayLine: String?
+        /// Set for an extra account's card.
+        var accountID: String? = nil
+
+        var id: String { accountID ?? kind.rawValue }
     }
 
     private func shown(_ windowKind: LimitWindowKind, for kind: ProviderKind, _ window: LimitWindow?) -> LimitWindow? {
@@ -562,12 +595,54 @@ struct OverviewPane: View {
                     todayLine: "\(formatTokens(x.totalTokens)) tokens · \(formatUSD(Pricing.codexCostUSD(x))) today")
             case .antigravity:
                 guard let g = snap.antigravity else { return nil }
+                let hasQuota = g.fiveHour != nil || g.weekly != nil || !g.groups.isEmpty
                 return Card(
                     kind: kind, title: "Antigravity",
                     fiveHour: shown(.fiveHour, for: kind, g.fiveHour),
                     weekly: shown(.weekly, for: kind, g.weekly),
-                    problem: (g.fiveHour == nil && g.weekly == nil) ? (g.isIDE ? "IDE activity detected · quota unavailable" : "No quota data yet · tap for CLI setup") : nil,
+                    problem: !hasQuota ? (g.isIDE ? "Desktop app detected · waiting for quota" : "No quota data yet · tap for CLI setup") : nil,
                     todayLine: "\(g.totalPrompts) prompts · \(formatUSD(Pricing.antigravityCostUSD(g))) today")
+            }
+        }
+    }
+
+    /// One card per extra account, under the default providers' cards.
+    private var accountCards: [Card] {
+        snap.accounts.compactMap { reading -> Card? in
+            let account = reading.account
+            guard settings.isShownInPopover(account.provider) else { return nil }
+            switch account.provider {
+            case .claude:
+                let limits = reading.claudeLimits
+                let isUsable: Bool = { if case .ok = limits?.state { return true }; return false }()
+                let problem: String? = {
+                    switch limits?.state {
+                    case .ok?: return nil
+                    case .stale?: return "Last reading is stale — use Claude Code in this account to refresh"
+                    default: return "No reading yet — set up its status line in Settings → Accounts"
+                    }
+                }()
+                let today = reading.claude.map {
+                    "\(formatTokens($0.total)) tokens · \(formatUSD(Pricing.claudeCostUSD($0))) today"
+                } ?? "No Claude logs found at \(account.path)"
+                return Card(
+                    kind: .claude, title: account.title,
+                    fiveHour: isUsable ? shown(.fiveHour, for: .claude, limits?.fiveHour) : nil,
+                    weekly: isUsable ? shown(.weekly, for: .claude, limits?.sevenDay) : nil,
+                    problem: problem, todayLine: today, accountID: account.id)
+            case .codex:
+                let limits = reading.codexLimits
+                let today = reading.codex.map {
+                    "\(formatTokens($0.totalTokens)) tokens · \(formatUSD(Pricing.codexCostUSD($0))) today"
+                } ?? "No Codex sessions found at \(account.path)"
+                return Card(
+                    kind: .codex, title: account.title,
+                    fiveHour: shown(.fiveHour, for: .codex, limits?.primary),
+                    weekly: shown(.weekly, for: .codex, limits?.secondary),
+                    problem: limits == nil ? "No limit data yet — run codex with this account once" : nil,
+                    todayLine: today, accountID: account.id)
+            case .antigravity:
+                return nil
             }
         }
     }
@@ -577,7 +652,7 @@ struct OverviewPane: View {
     /// problem state.
     private var tightest: (kind: ProviderKind, title: String, label: String, window: LimitWindow)? {
         var best: (kind: ProviderKind, title: String, label: String, window: LimitWindow)?
-        for card in cards {
+        for card in cards + accountCards {
             for (label, w) in [("5-hour", card.fiveHour), ("Weekly", card.weekly)] {
                 // Skip only windows already known to have rolled over. A nil
                 // reset means "unknown", not "expired" — the Claude Desktop
@@ -592,12 +667,17 @@ struct OverviewPane: View {
         return best
     }
 
+    private var tightestWarnBelow: Double {
+        guard let tightest else { return AppSettings.shared.warnBelowRemaining }
+        return AppSettings.shared.warnBelow(tightest.kind, tightest.label == "5-hour" ? .fiveHour : .weekly)
+    }
+
     /// The best case for "switch to this instead" among every OTHER
     /// provider's tightest window. Only surfaced when the current top pick
     /// is genuinely tight and the alternative has a real margin over it —
     /// otherwise this would just be noise on every visit to Overview.
     private var switchSuggestion: (kind: ProviderKind, title: String, remainingPercent: Double)? {
-        guard let tightest, tightest.window.remainingPercent < AppSettings.shared.warnBelowRemaining else { return nil }
+        guard let tightest, tightest.window.remainingPercent < tightestWarnBelow else { return nil }
         var best: (kind: ProviderKind, title: String, remainingPercent: Double)?
         for card in cards where card.kind != tightest.kind {
             for w in [card.fiveHour, card.weekly].compactMap({ $0 }) {
@@ -619,7 +699,7 @@ struct OverviewPane: View {
                 PaneHeader(title: "Overview")
 
                 if let tightest {
-                    HeroRemainingCard(providerTitle: tightest.title, windowLabel: tightest.label, window: tightest.window)
+                    HeroRemainingCard(providerTitle: tightest.title, windowLabel: tightest.label, window: tightest.window, warnBelow: tightestWarnBelow)
                 }
 
                 if let suggestion = switchSuggestion {
@@ -639,6 +719,20 @@ struct OverviewPane: View {
                             fiveHour: card.fiveHour, weekly: card.weekly,
                             problem: card.problem, todayLine: card.todayLine,
                             onTap: { onSelectProvider(card.kind) })
+                    }
+                }
+                if !accountCards.isEmpty {
+                    Text("Other accounts")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(accountCards, id: \.id) { card in
+                        ProviderSummaryCard(
+                            kind: card.kind, title: card.title, icon: card.kind.icon,
+                            iconTint: card.kind == .claude ? Color(nsColor: BrandIcons.claudeBrandColor) : nil,
+                            fiveHour: card.fiveHour, weekly: card.weekly,
+                            problem: card.problem, todayLine: card.todayLine,
+                            isAccount: true,
+                            onTap: {})
                     }
                 }
                 NoteText(text: "Tap a provider for token breakdowns, sessions, and cost trends.")
@@ -882,18 +976,34 @@ struct AntigravityPane: View {
     @ViewBuilder
     private func antigravityLimitsSection(_ g: AntigravityUsage) -> some View {
         let settings = AppSettings.shared
-        let fiveHour = settings.isLimitWindowShown(.fiveHour, for: .antigravity) ? g.fiveHour : nil
-        let weekly = settings.isLimitWindowShown(.weekly, for: .antigravity) ? g.weekly : nil
-        if fiveHour == nil && weekly == nil {
+        let hasAnyLimit = g.fiveHour != nil || g.weekly != nil || !g.groups.isEmpty
+
+        if !hasAnyLimit {
             AntigravityStatusLineSetupPrompt(isIDE: g.isIDE)
         } else {
-            // Keep the observation age visible so a cached Antigravity
-            // reading from an hour ago never looks identical to a live one.
             if let asOf = g.asOf {
                 CaptionText(title: "Limits · as of \(humanAgo(asOf))")
             }
-            if let w = fiveHour { limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour) }
-            if let w = weekly { limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly) }
+            if !g.groups.isEmpty {
+                ForEach(g.groups) { group in
+                    CaptionText(title: group.name, info: group.description)
+                    if settings.isLimitWindowShown(.fiveHour, for: .antigravity), let w = group.fiveHour {
+                        limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour, group: group.id)
+                    }
+                    if settings.isLimitWindowShown(.weekly, for: .antigravity), let w = group.weekly {
+                        limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly, group: group.id)
+                    }
+                    if !settings.isLimitWindowShown(.fiveHour, for: .antigravity)
+                        && !settings.isLimitWindowShown(.weekly, for: .antigravity) {
+                        NoteText(text: "Both windows hidden — enable in Settings › Providers")
+                    }
+                }
+            } else {
+                let fiveHour = settings.isLimitWindowShown(.fiveHour, for: .antigravity) ? g.fiveHour : nil
+                let weekly = settings.isLimitWindowShown(.weekly, for: .antigravity) ? g.weekly : nil
+                if let w = fiveHour { limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour) }
+                if let w = weekly { limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly) }
+            }
         }
     }
 }
@@ -910,7 +1020,14 @@ struct AnalyticsPane: View {
 
     /// The cached 30-day trend covers both range options — a 7-day view is
     /// just its last 7 entries, so switching ranges doesn't need a re-fetch.
+    ///
+    /// 90 days / All (`0`) reach past the live scan, so they're built from
+    /// `DailyHistoryStore`'s recorded days with the live trend laid over it.
     private func trend(for days: Int) -> DailyTrend? {
+        if days > 30 || days == 0 {
+            guard let live = snap.dailyTrend else { return nil }
+            return DailyHistoryStore.extendedTrend(days: days == 0 ? nil : days, live: live)
+        }
         guard let full = snap.dailyTrend, full.days.count >= days else { return nil }
         var sliced = DailyTrend()
         sliced.days = Array(full.days.suffix(days))
@@ -978,10 +1095,12 @@ struct AnalyticsPane: View {
                     Picker("", selection: $trendDays) {
                         Text("7 days").tag(7)
                         Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                        Text("All").tag(0)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 150)
+                    .frame(width: 230)
                 }
                 if let trend = trend(for: trendDays) {
                     if let busiest = trend.busiestWeekday, trend.days.count > 7 {
@@ -1112,6 +1231,7 @@ struct PopoverFooter: View {
     let onExportJSON: () -> Void
     let onExportCSV: () -> Void
     let onSaveCSV: () -> Void
+    let onSaveDailyHistoryCSV: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
@@ -1167,6 +1287,7 @@ struct PopoverFooter: View {
                     Button("Copy CSV") { copy(onExportCSV) }
                     Divider()
                     Button("Save CSV…", action: onSaveCSV)
+                    Button("Save daily history CSV…", action: onSaveDailyHistoryCSV)
                 } label: {
                     Label(justCopied ? "Copied!" : "Export…", systemImage: "square.and.arrow.up")
                 }
@@ -1194,6 +1315,7 @@ struct PopoverContentView: View {
     let onExportJSON: () -> Void
     let onExportCSV: () -> Void
     let onSaveCSV: () -> Void
+    let onSaveDailyHistoryCSV: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
@@ -1202,6 +1324,7 @@ struct PopoverContentView: View {
         onRefresh: @escaping () -> Void, onCheckForUpdates: @escaping () -> Void,
         onExportReport: @escaping () -> Void, onExportJSON: @escaping () -> Void,
         onExportCSV: @escaping () -> Void, onSaveCSV: @escaping () -> Void,
+        onSaveDailyHistoryCSV: @escaping () -> Void,
         onSettings: @escaping () -> Void, onQuit: @escaping () -> Void
     ) {
         self.viewModel = viewModel
@@ -1212,9 +1335,14 @@ struct PopoverContentView: View {
         self.onExportJSON = onExportJSON
         self.onExportCSV = onExportCSV
         self.onSaveCSV = onSaveCSV
+        self.onSaveDailyHistoryCSV = onSaveDailyHistoryCSV
         self.onSettings = onSettings
         self.onQuit = onQuit
-        _selection = State(initialValue: .overview)
+        if CommandLine.arguments.contains("--antigravity") {
+            _selection = State(initialValue: .provider(.antigravity))
+        } else {
+            _selection = State(initialValue: .overview)
+        }
     }
 
     private var tabs: [PopoverPane] {
@@ -1257,7 +1385,7 @@ struct PopoverContentView: View {
                     }
                 }
                 .frame(maxHeight: .infinity)
-                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onExportJSON: onExportJSON, onExportCSV: onExportCSV, onSaveCSV: onSaveCSV, onSettings: onSettings, onQuit: onQuit)
+                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onExportJSON: onExportJSON, onExportCSV: onExportCSV, onSaveCSV: onSaveCSV, onSaveDailyHistoryCSV: onSaveDailyHistoryCSV, onSettings: onSettings, onQuit: onQuit)
             }
             .frame(width: 380)
         }

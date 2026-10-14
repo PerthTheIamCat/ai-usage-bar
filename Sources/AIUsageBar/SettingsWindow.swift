@@ -12,6 +12,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             ProvidersTab()
                 .tabItem { Label("Providers", systemImage: "arrow.up.arrow.down") }
+            AccountsTab()
+                .tabItem { Label("Accounts", systemImage: "person.2") }
             CostTab()
                 .tabItem { Label("Cost", systemImage: "dollarsign.circle") }
             LogTab()
@@ -19,7 +21,7 @@ struct SettingsView: View {
             ChangelogTab()
                 .tabItem { Label("Changelog", systemImage: "clock.arrow.circlepath") }
         }
-        .frame(width: 620, height: 650)
+        .frame(width: 620, height: 750)
     }
 }
 
@@ -32,6 +34,13 @@ private struct GeneralTab: View {
     /// stored default — so a picker bound to the default alone looked broken:
     /// changing it never altered the menu bar. This writes through to all
     /// providers, and reports the shared style when they agree.
+    private func warnOverrideBinding(_ kind: ProviderKind, _ window: LimitWindowKind) -> Binding<Double?> {
+        Binding(
+            get: { settings.warnBelowOverride(kind, window) },
+            set: { settings.setWarnBelowOverride($0, kind, window) }
+        )
+    }
+
     private var allProvidersStyleBinding: Binding<LimitStyle> {
         Binding(
             get: {
@@ -114,6 +123,37 @@ private struct GeneralTab: View {
             }
 
             Section {
+                HStack {
+                    Text("Hardware status")
+                    Spacer()
+                    if TouchBarHardware.hasPhysicalTouchBar {
+                        Label("Touch Bar detected", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        Label("Not detected (\(TouchBarHardware.modelDisplayName))", systemImage: "xmark.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Toggle("Show in Touch Bar (Control Strip)", isOn: $settings.touchBarEnabled)
+                    .disabled(!TouchBarHardware.hasPhysicalTouchBar && !settings.forceTouchBarSupport)
+
+                if !TouchBarHardware.hasPhysicalTouchBar {
+                    Toggle("Enable anyway (for Touch Bar simulator or virtual tools)", isOn: $settings.forceTouchBarSupport)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Touch Bar")
+            } footer: {
+                Text(TouchBarHardware.hasPhysicalTouchBar
+                     ? "Displays live AI provider meters in the Touch Bar Control Strip next to system controls."
+                     : "This Mac (\(TouchBarHardware.modelDisplayName)) does not have a physical Touch Bar. You can enable it anyway if using Xcode Touch Bar Simulator or third-party virtual Touch Bar tools.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Toggle("Cache hit rate", isOn: $settings.showCacheHitRate)
                 Toggle("Per-model breakdown", isOn: $settings.showModelBreakdown)
                 Toggle("Avg/session", isOn: $settings.showAvgPerSession)
@@ -141,6 +181,18 @@ private struct GeneralTab: View {
                         .foregroundStyle(.secondary)
                 }
                 Toggle("Send a notification when a window crosses it", isOn: $settings.notificationsEnabled)
+                DisclosureGroup("Per-window thresholds") {
+                    ForEach(ProviderKind.allCases) { kind in
+                        ForEach(kind.supportedLimitWindows) { window in
+                            Picker("\(kind.displayName) \(window.displayName.lowercased())", selection: warnOverrideBinding(kind, window)) {
+                                Text("Global (\(Int(settings.warnBelowRemaining))%)").tag(Double?.none)
+                                ForEach(Array(stride(from: 5.0, through: 45.0, by: 5.0)), id: \.self) { value in
+                                    Text("\(Int(value))%").tag(Double?.some(value))
+                                }
+                            }
+                        }
+                    }
+                }
             } header: {
                 Text("Low-limit warning")
             } footer: {
@@ -256,6 +308,11 @@ private struct MenuBarStyleOption: View {
         case .barAndPercent: return "Meters + values"
         case .ringAndPercent: return "Rings + values"
         case .dotAndPercent: return "Dots + values"
+        case .blocks: return "Segmented level blocks"
+        case .blocksAndPercent: return "Blocks + values"
+        case .battery: return "Battery gauge"
+        case .batteryAndPercent: return "Battery + values"
+        case .pill: return "Inline pill badge"
         }
     }
 
@@ -783,7 +840,7 @@ final class SettingsWindowController {
             let hosting = NSHostingController(rootView: SettingsView())
             let w = NSWindow(contentViewController: hosting)
             w.title = "AI Usage Bar Settings"
-            w.styleMask = [.titled, .closable]
+            w.styleMask = [.titled, .closable, .resizable]
             w.isReleasedWhenClosed = false
             w.center()
             window = w

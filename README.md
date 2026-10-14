@@ -51,8 +51,6 @@ own.
    - If the release is not Developer ID signed and notarized, macOS may block
      the first launch: Control-click the app, choose **Open**, then confirm
      **Open**.
-   - The `macos-arm64.zip` is still published; it is what the in-app updater
-     uses, and it works for a manual install too.
 4. Claude reads work differently depending on how you use Claude:
    - **Claude Desktop app** — nothing to configure. AI Usage Bar reads its
      local plan-usage file directly; open the popover after using Claude once
@@ -149,6 +147,19 @@ file fingerprint so refreshes do not rescan unchanged files.
 On startup, today's provider data is shown before the heavier 7-/30-day cost
 and trend scan finishes; the menu bar and popover footer show the current
 loading phase while that background work runs.
+
+## Multiple accounts
+
+The default `~/.claude` and `~/.codex` accounts are always shown. To track
+another account, give it its own config folder — run Claude Code with
+`CLAUDE_CONFIG_DIR=~/.claude-work` or Codex with `CODEX_HOME=~/.codex-work` —
+and add that folder in **Settings → Accounts**. Each extra account appears
+under "Other accounts" in the popover with its own limits and today's usage.
+For an extra Claude account, use **Set Up Status Line** on its row; that
+installs a bridge in the account's folder that writes to a separate snapshot,
+so readings never mix between accounts. Extra accounts are popover-only: the
+menu bar, history charts, and alerts follow the default accounts. Antigravity
+supports a single account.
 
 ## Limits to know
 

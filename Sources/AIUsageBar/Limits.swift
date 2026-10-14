@@ -1,7 +1,6 @@
 import Foundation
 
-/// A single usage window (5-hour session or 7-day weekly).
-struct LimitWindow {
+struct LimitWindow: Equatable {
     var usedPercent: Double   // 0-100
     var resetsAt: Date?
     /// True when `usedPercent` was projected forward from the last real
@@ -9,8 +8,18 @@ struct LimitWindow {
     /// estimate is never mistaken for a measurement, and deliberately not
     /// used to raise limit notifications.
     var isEstimated = false
+    var resetDescription: String? = nil
 
     var remainingPercent: Double { max(0, 100 - usedPercent) }
+}
+
+/// A model group in Antigravity (e.g. "Gemini Models", "Claude and GPT models").
+struct AntigravityModelGroup: Identifiable, Equatable {
+    var id: String { name }
+    var name: String
+    var description: String?
+    var weekly: LimitWindow?
+    var fiveHour: LimitWindow?
 }
 
 struct ClaudeLimits {
@@ -45,6 +54,14 @@ func humanReset(_ date: Date?) -> String {
     let secs = date.timeIntervalSinceNow
     if secs <= 0 { return "now" }
     return humanDuration(secs)
+}
+
+/// The wall-clock time of a reset: "13:02" within the next day, otherwise
+/// with the weekday ("Sun 13:02") so a weekly reset isn't ambiguous.
+func resetClock(_ date: Date, now: Date = Date()) -> String {
+    let time = date.formatted(date: .omitted, time: .shortened)
+    if date.timeIntervalSince(now) < 20 * 3600, Calendar.current.isDate(date, inSameDayAs: now) { return time }
+    return date.formatted(.dateTime.weekday(.abbreviated)) + " " + time
 }
 
 /// "3d 17h" / "4h 12m" / "9m" for a positive duration in seconds.

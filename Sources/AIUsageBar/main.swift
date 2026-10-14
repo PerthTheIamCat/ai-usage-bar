@@ -125,11 +125,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // loop at 12.5 Hz forever, which is real (if small) idle cost added
         // up over a full day for a feature most users see rarely.
 
+        TouchBarManager.shared.onItemTapped = { [weak self] in
+            self?.statusItemClicked()
+        }
+        TouchBarManager.shared.start()
+
         NotificationCenter.default.addObserver(
             forName: .usageSettingsChanged, object: nil, queue: .main
         ) { [weak self] _ in
+            TouchBarManager.shared.syncWithSettings()
             guard let self, let snap = self.lastSnapshot else { return }
             self.apply(snap)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .usageAccountsChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.refresh()
+        }
+
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.aiusagebar.togglePopover"), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.statusItemClicked()
+        }
+
+        if CommandLine.arguments.contains("--settings") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                SettingsWindowController.shared.show()
+            }
+        }
+        if CommandLine.arguments.contains("--popover") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.statusItemClicked()
+            }
         }
     }
 
@@ -155,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onExportJSON: { [weak self] in self?.copyUsageJSON() },
             onExportCSV: { [weak self] in self?.copyUsageCSV() },
             onSaveCSV: { [weak self] in self?.saveUsageCSV() },
+            onSaveDailyHistoryCSV: { [weak self] in self?.saveDailyHistoryCSV() },
             onSettings: { [weak self] in self?.settingsClicked() },
             onQuit: { [weak self] in self?.quitClicked() }
         )
@@ -220,6 +250,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func saveDailyHistoryCSV() {
+        let panel = NSSavePanel()
+        panel.title = "Export Daily History CSV"
+        panel.nameFieldStringValue = "ai-usage-daily-history-\(Date().formatted(.dateTime.year().month().day())).csv"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try DailyHistoryStore.generateCSV().write(to: url, atomically: true, encoding: .utf8)
+                appLog("exported daily history CSV to \(url.lastPathComponent)")
+            } catch {
+                appLog("daily history CSV export failed — \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Cheap Date compare on every tick; the Claude statusLine snapshot is
     /// local, while the exchange-rate fetch has its own slow cadence.
     private func maybeRefreshExchangeRate() {
@@ -248,14 +293,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         maybeRefreshExchangeRate()
         nextRefreshAt = Date().addingTimeInterval(refreshInterval)
         let previousSourcesFingerprint = lastSourcesFingerprint
-        DispatchQueue.global(qos: .utility).async {
+        // Read on the main thread: settings are main-thread state.
+        let accounts = AppSettings.shared.extraAccounts
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             // Most minutes nothing has written to any log we read — the Mac is
             // idle, or the user isn't using a CLI right now. Comparing a
             // stat-only signature first turns those ticks into a few dozen
             // `stat` calls instead of re-reading and re-parsing every log, and
             // that idle cost is what the app pays for the overwhelming
             // majority of the hours it is running.
-            let sourcesFingerprint = UsageReader.todaySourcesFingerprint()
+            let sourcesFingerprint = UsageReader.todaySourcesFingerprint(accounts: accounts)
             if let previous = previousSourcesFingerprint, previous == sourcesFingerprint {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.activeRefreshID == refreshID else { return }
@@ -271,7 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return
             }
-            let snap = UsageReader.snapshot(includePeriodStats: false) { message in
+            let snap = UsageReader.snapshot(includePeriodStats: false, accounts: accounts) { message in
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.activeRefreshID == refreshID else { return }
                     self.setLoadingStatus(message)
@@ -307,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let startedAt = Date()
         setLoadingStatus("Calculating 7/30-day costs…")
 
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             // One 30-day scan, not two: the period costs are summed from the
             // same daily buckets the trend is built from, so computing them
             // separately meant reading every log of the last month twice.
@@ -467,6 +514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordBurnRateSamples(snap)
         updateAntigravityAnimation(isWorking: snap.antigravity?.isWorking == true)
         UsageNotifier.shared.check(snap)
+        TouchBarManager.shared.update(snapshot: snap)
     }
 
     /// Starts or stops the icon-spin timer to match Antigravity's actual
@@ -499,6 +547,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let w = snap.codexLimits?.secondary { BurnRateTracker.record(.codex, .weekly, usedPercent: w.usedPercent) }
         if let w = snap.antigravity?.fiveHour { BurnRateTracker.record(.antigravity, .fiveHour, usedPercent: w.usedPercent) }
         if let w = snap.antigravity?.weekly { BurnRateTracker.record(.antigravity, .weekly, usedPercent: w.usedPercent) }
+        for g in snap.antigravity?.groups ?? [] {
+            if let w = g.fiveHour { BurnRateTracker.record(.antigravity, .fiveHour, usedPercent: w.usedPercent, group: g.id) }
+            if let w = g.weekly { BurnRateTracker.record(.antigravity, .weekly, usedPercent: w.usedPercent, group: g.id) }
+        }
     }
 
     // MARK: - Status bar title
@@ -569,14 +621,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windows = kind.supportedLimitWindows.filter {
             settings.isLimitWindowShown($0, for: kind)
         }.map {
-            MenuBarWindow(kind: $0, remainingPercent: $0 == .fiveHour ? fiveHour : weekly)
+            MenuBarWindow(kind: $0, remainingPercent: $0 == .fiveHour ? fiveHour : weekly,
+                          warnBelow: settings.warnBelow(kind, $0))
         }
         let details = windows.map { window in
             let value = window.validRemaining.map { settings.displayMode.rowText(remaining: $0) } ?? "unavailable"
             return "\(window.kind.displayName): \(value)"
         }.joined(separator: ", ")
         return StatusBarPart(icon: icon, text: fallback, windows: windows,
-                             warning: windows.contains { ($0.validRemaining ?? 100) < settings.warnBelowRemaining },
+                             warning: windows.contains { ($0.validRemaining ?? 100) < ($0.warnBelow ?? settings.warnBelowRemaining) },
                              style: settings.limitStyle(for: kind),
                              accessibilityText: "\(kind.displayName): \(windows.isEmpty ? fallback : details)\(stateDescription)")
     }
@@ -629,7 +682,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.setAccessibilityLabel(description)
         let signature = parts.map { part in
             let meters = part.windows.map {
-                "\($0.kind.rawValue):\($0.validRemaining.map { String(format: "%.1f", $0) } ?? "-")"
+                "\($0.kind.rawValue):\($0.validRemaining.map { String(format: "%.1f", $0) } ?? "-"):\($0.warnBelow ?? -1)"
             }.joined(separator: ",")
             return "\(part.accessibilityText)|\(meters)|\(part.warning)|\(part.style?.rawValue ?? "-")"
         }.joined(separator: "#") + "@\(font.pointSize)|\(settings.displayMode.rawValue)|\(settings.warnBelowRemaining)"
@@ -673,7 +726,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 if CommandLine.arguments.contains("--claude-statusline") {
     let input = FileHandle.standardInput.readDataToEndOfFile()
-    print(ClaudeLimitsReader.captureStatusLineInput(input))
+    // `--account <id>` routes the reading to an extra account's own snapshot.
+    let arguments = CommandLine.arguments
+    let accountID = arguments.firstIndex(of: "--account")
+        .flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+    print(ClaudeLimitsReader.captureStatusLineInput(input, accountID: accountID))
     exit(0)
 }
 
@@ -701,7 +758,7 @@ func dumpSessionActivities(_ provider: String, _ sessions: [SessionActivity]) {
 }
 
 if CommandLine.arguments.contains("--dump") {
-    let snap = UsageReader.snapshot()
+    let snap = UsageReader.snapshot(accounts: AppSettings.shared.extraAccounts)
     if let c = snap.claude {
         print("Claude: total=\(formatTokens(c.total)) in=\(c.inputTokens) out=\(c.outputTokens) cacheW=\(c.cacheCreationTokens) cacheR=\(c.cacheReadTokens) sessions=\(c.sessionCount) model=\(c.lastModel ?? "-")")
         if !c.skillCounts.isEmpty {
@@ -749,8 +806,25 @@ if CommandLine.arguments.contains("--dump") {
         }
         let source = g.isIDE ? "IDE" : "CLI"
         print("Antigravity: source=\(source) prompts=\(g.totalPrompts) sessions=\(g.sessionCount) \(w("5h", g.fiveHour))  \(w("weekly", g.weekly))")
+        for grp in g.groups {
+            print("  Group: \(grp.name) · \(w("5h", grp.fiveHour)) · \(w("weekly", grp.weekly))")
+            if let desc = grp.weekly?.resetDescription ?? grp.fiveHour?.resetDescription {
+                print("    Notice: \(desc)")
+            }
+        }
     } else {
         print("Antigravity: not detected")
+    }
+    for reading in snap.accounts {
+        func percent(_ x: LimitWindow?) -> String { x.map { "\(Int($0.remainingPercent))% left" } ?? "n/a" }
+        let name = reading.account.title
+        if let c = reading.claude {
+            print("\(name): total=\(formatTokens(c.total)) sessions=\(c.sessionCount) 5h=\(percent(reading.claudeLimits?.fiveHour)) weekly=\(percent(reading.claudeLimits?.sevenDay))")
+        } else if let x = reading.codex {
+            print("\(name): total=\(formatTokens(x.totalTokens)) sessions=\(x.sessionCount) 5h=\(percent(reading.codexLimits?.primary)) weekly=\(percent(reading.codexLimits?.secondary))")
+        } else {
+            print("\(name): not detected at \(reading.account.path)")
+        }
     }
     exit(0)
 }

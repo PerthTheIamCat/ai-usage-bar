@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 enum UsageReader {
     static let claudeDir = FileManager.default.homeDirectoryForCurrentUser
@@ -21,7 +22,7 @@ enum UsageReader {
     // per-file incremental parse caches below replace them and keep working
     // while a file grows.
     private static let codexLimitsCacheLock = NSLock()
-    private static var codexLimitsCache: (fingerprint: String, value: CodexLimits?)?
+    private static var codexLimitsCache: [String: (fingerprint: String, value: CodexLimits?)] = [:]
     private static let trendCacheLock = NSLock()
     private static var dailyTrendCache: (fingerprint: String, days: Int, value: DailyTrend)?
 
@@ -31,6 +32,7 @@ enum UsageReader {
     ///   it on its own slower cadence.
     static func snapshot(
         includePeriodStats: Bool = false,
+        accounts: [ExtraAccount] = [],
         progress: ((String) -> Void)? = nil
     ) -> UsageSnapshot {
         let fm = FileManager.default
@@ -67,6 +69,10 @@ enum UsageReader {
         {
             snap.antigravity = readAntigravityToday()
         }
+        if !accounts.isEmpty {
+            progress?("Reading extra accounts…")
+            snap.accounts = accounts.map(accountReading)
+        }
         progress?("Reading activity timeline…")
         snap.hourlyUsage = readHourlyUsage()
         if includePeriodStats {
@@ -78,6 +84,27 @@ enum UsageReader {
         progress?("Updating display…")
         snap.updatedAt = Date()
         return snap
+    }
+
+    /// Today's usage and limits for one extra account, read from its own
+    /// config directory. Daily history, the activity chart and notifications
+    /// stay with the default account; extra accounts show usage only.
+    static func accountReading(_ account: ExtraAccount) -> AccountReading {
+        var reading = AccountReading(account: account)
+        let exists = FileManager.default.fileExists(atPath: account.logsDir.path)
+        switch account.provider {
+        case .claude:
+            if exists { reading.claude = readClaudeToday(under: account.claudeProjectsDir) }
+            reading.claudeLimits = ClaudeLimitsReader.fetch(accountID: account.id)
+        case .codex:
+            if exists {
+                reading.codex = readCodexToday(under: account.codexSessionsDir)
+                reading.codexLimits = codexLimits(under: account.codexSessionsDir)
+            }
+        case .antigravity:
+            break
+        }
+        return reading
     }
 
     /// Codex data is read from local JSONL files rather than an API, so it
@@ -698,7 +725,7 @@ enum UsageReader {
         }
     }
 
-    private static func readClaudeToday() -> ClaudeUsage {
+    private static func readClaudeToday(under claudeDir: URL = UsageReader.claudeDir) -> ClaudeUsage {
         readClaude(matching: { isTodayLocal(isoTimestamp: $0) },
                    files: filesModifiedToday(under: claudeDir, ext: "jsonl"),
                    includeSessions: true)
@@ -847,7 +874,7 @@ enum UsageReader {
     /// Newest account-wide rate-limit snapshot Codex wrote to any recent
     /// session log. The 5h/weekly windows are account-global, so the freshest
     /// reading across all sessions is what we want (not just today's).
-    static func codexLimits() -> CodexLimits? {
+    static func codexLimits(under codexDir: URL = UsageReader.codexDir) -> CodexLimits? {
         let fm = FileManager.default
         guard fm.fileExists(atPath: codexDir.path) else { return nil }
         let cutoff = Date().addingTimeInterval(-8 * 24 * 3600)
@@ -873,7 +900,7 @@ enum UsageReader {
             .map { "\($0.url.path)|\($0.modified.timeIntervalSince1970)|\($0.size)" }
             .joined(separator: "|")
         codexLimitsCacheLock.lock()
-        if let cached = codexLimitsCache, cached.fingerprint == fingerprint {
+        if let cached = codexLimitsCache[codexDir.path], cached.fingerprint == fingerprint {
             codexLimitsCacheLock.unlock()
             return cached.value
         }
@@ -888,7 +915,7 @@ enum UsageReader {
         }
 
         codexLimitsCacheLock.lock()
-        codexLimitsCache = (fingerprint, result)
+        codexLimitsCache[codexDir.path] = (fingerprint, result)
         codexLimitsCacheLock.unlock()
         return result
     }
@@ -1064,7 +1091,7 @@ enum UsageReader {
         }
     }
 
-    private static func readCodexToday() -> CodexUsage {
+    private static func readCodexToday(under codexDir: URL = UsageReader.codexDir) -> CodexUsage {
         readCodex(matching: { isTodayLocal(isoTimestamp: $0) },
                   files: filesModifiedToday(under: codexDir, ext: "jsonl"),
                   includeSessions: true)
@@ -1169,9 +1196,24 @@ enum UsageReader {
     /// skip the whole scan: an idle Mac then costs a few dozen `stat` calls a
     /// minute instead of re-reading and re-parsing the logs from scratch.
     /// Deliberately built from metadata only — no file is opened here.
-    static func todaySourcesFingerprint() -> String {
+    static func todaySourcesFingerprint(accounts: [ExtraAccount] = []) -> String {
         let fm = FileManager.default
         var parts: [String] = []
+        for account in accounts {
+            // The account list itself is part of the signature, so adding or
+            // removing one forces a re-read even when no log has changed.
+            parts.append("account:\(account.id)|\(account.path)")
+            if fm.fileExists(atPath: account.logsDir.path) {
+                parts.append(filesFingerprint(filesModifiedToday(under: account.logsDir, ext: "jsonl")))
+                if account.provider == .codex {
+                    parts.append(filesFingerprint(filesModified(under: account.logsDir, ext: "jsonl", sinceDaysAgo: 8)))
+                }
+            }
+            if account.provider == .claude,
+               let url = ClaudeLimitsReader.accountSnapshotURL(accountID: account.id) {
+                parts.append(fileStamp(url))
+            }
+        }
         parts.append("\(calendar.startOfDay(for: Date()).timeIntervalSince1970)")
         if fm.fileExists(atPath: claudeDir.path) {
             parts.append(filesFingerprint(filesModifiedToday(under: claudeDir, ext: "jsonl")))
@@ -1191,9 +1233,11 @@ enum UsageReader {
             parts.append(filesFingerprint(filesModified(under: antigravityDir.appendingPathComponent("log"), ext: "log", sinceDaysAgo: 2)))
         }
         if fm.fileExists(atPath: antigravityIDEDir.path) {
+            parts.append(fileStamp(antigravityIDEDir.appendingPathComponent("conversation_summaries.db")))
             parts.append(filesFingerprint(filesModified(under: antigravityIDEDir.appendingPathComponent("conversations"), ext: "db", sinceDaysAgo: 8)))
         }
         parts.append(fileStamp(AntigravityLimitsReader.statusLineSnapshotURL))
+        parts.append(fileStamp(AntigravityLimitsReader.quotaSummaryCacheURL))
         return parts.joined(separator: "#")
     }
 
@@ -1226,44 +1270,89 @@ enum UsageReader {
 
     private static func readAntigravityToday() -> AntigravityUsage {
         var usage = AntigravityUsage()
-        let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
-        let limits = readAntigravityLimits()
         let statusLine = AntigravityLimitsReader.fetch()
+        let limits = readAntigravityLimits()
+
         usage.fiveHour = statusLine?.fiveHour ?? limits.short?.window
         usage.weekly = statusLine?.weekly ?? limits.long?.window
+        usage.groups = statusLine?.groups ?? []
         usage.asOf = [statusLine?.observedAt, limits.short?.asOf, limits.long?.asOf]
             .compactMap { $0 }.max()
-        guard FileManager.default.fileExists(atPath: historyFile.path) else {
-            readAntigravityIDEActivity(into: &usage)
-            usage.isWorking = antigravityIsWorking()
-            return usage
-        }
-        var uniqueSessions = Set<String>()
-        forEachLine(of: historyFile) { line in
-            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  let timestampMS = obj["timestamp"] as? Double
-            else { return }
-            let date = Date(timeIntervalSince1970: timestampMS / 1000.0)
-            if calendar.isDateInToday(date) {
-                usage.totalPrompts += 1
-                if let sessionID = obj["conversationId"] as? String {
-                    uniqueSessions.insert(sessionID)
+
+        // Read IDE activity from conversation_summaries.db
+        readAntigravityIDEActivity(into: &usage)
+
+        // Also check CLI history if present
+        let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
+        if FileManager.default.fileExists(atPath: historyFile.path) {
+            var cliSessions = Set<String>()
+            forEachLine(of: historyFile) { line in
+                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let timestampMS = obj["timestamp"] as? Double
+                else { return }
+                let date = Date(timeIntervalSince1970: timestampMS / 1000.0)
+                if calendar.isDateInToday(date) {
+                    usage.totalPrompts += 1
+                    if let sessionID = obj["conversationId"] as? String {
+                        cliSessions.insert(sessionID)
+                    }
                 }
             }
+            usage.sessionCount += cliSessions.count
         }
-        usage.sessionCount = uniqueSessions.count
-        if usage.sessionCount == 0 {
-            readAntigravityIDEActivity(into: &usage)
-        }
+
         usage.isWorking = antigravityIsWorking()
         return usage
     }
 
-    /// IDE conversations are SQLite databases rather than the CLI's JSONL
-    /// history. Count those databases as sessions so an IDE user is detected
-    /// and gets a useful provider pane. Quota remains nil until the IDE
-    /// exposes a stable local quota payload.
+    /// Reads IDE activity from conversation_summaries.db (or conversations directory),
+    /// counting today's active sessions and prompt/step counts.
     private static func readAntigravityIDEActivity(into usage: inout AntigravityUsage) {
+        let dbURL = antigravityIDEDir.appendingPathComponent("conversation_summaries.db")
+        if FileManager.default.fileExists(atPath: dbURL.path) {
+            var db: OpaquePointer?
+            let uri = "file:\(dbURL.path)?immutable=1"
+            if sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK {
+                let sql = "SELECT conversation_id, step_count, last_modified_time, last_user_input_time FROM conversation_summaries"
+                var stmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                    var ideSessions = 0
+                    var ideSteps = 0
+                    var latestMod: Date?
+
+                    while sqlite3_step(stmt) == SQLITE_ROW {
+                        let stepCount = Int(sqlite3_column_int(stmt, 1))
+                        let modStr = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
+                        let inputStr = sqlite3_column_text(stmt, 3).map { String(cString: $0) } ?? ""
+
+                        let modDate = parseSQLiteDate(modStr)
+                        let inputDate = parseSQLiteDate(inputStr)
+
+                        if let m = modDate {
+                            if latestMod == nil || m > latestMod! { latestMod = m }
+                        }
+
+                        let isToday = (modDate.map { calendar.isDateInToday($0) } ?? false) ||
+                                      (inputDate.map { calendar.isDateInToday($0) } ?? false)
+                        if isToday {
+                            ideSessions += 1
+                            ideSteps += max(1, stepCount)
+                        }
+                    }
+                    sqlite3_finalize(stmt)
+                    usage.sessionCount += ideSessions
+                    usage.totalPrompts += ideSteps
+                    usage.isIDE = true
+                    if let lm = latestMod {
+                        usage.asOf = max(usage.asOf ?? .distantPast, lm)
+                    }
+                }
+                sqlite3_close(db)
+                if usage.isIDE { return }
+            }
+        }
+
+        // Fallback to counting today's modified .db files in conversations directory
         let conversations = antigravityIDEDir.appendingPathComponent("conversations")
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: conversations,
@@ -1272,13 +1361,26 @@ enum UsageReader {
         else { return }
         let databases = files.filter { url in
             guard url.pathExtension == "db",
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
+                  values.isRegularFile == true
             else { return false }
-            return values.isRegularFile == true
+            return true
         }
-        usage.sessionCount = databases.count
+        let todayDatabases = databases.filter { url in
+            guard let m = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return false }
+            return calendar.isDateInToday(m)
+        }
+        usage.sessionCount += todayDatabases.count
         usage.isIDE = !databases.isEmpty
         usage.asOf = databases.map { modifiedDate($0) }.max() ?? usage.asOf
+    }
+
+    private static func parseSQLiteDate(_ raw: String) -> Date? {
+        guard !raw.isEmpty else { return nil }
+        let iso = raw.replacingOccurrences(of: " ", with: "T")
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return isoFormatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
     }
 
     /// Prompt count over the last `daysBack` local days, for the 7-/30-day
@@ -1441,22 +1543,51 @@ enum UsageReader {
 
     private static func antigravityDailyBuckets(days: Int) -> (prompts: [Int], costUSD: [Double]) {
         var promptBuckets = Array(repeating: 0, count: days)
-        let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
-        guard FileManager.default.fileExists(atPath: historyFile.path) else {
-            return (promptBuckets, Array(repeating: 0, count: days))
-        }
         let todayStart = calendar.startOfDay(for: Date())
-        forEachLine(of: historyFile) { line in
-            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  let timestampMS = obj["timestamp"] as? Double
-            else { return }
-            let date = Date(timeIntervalSince1970: timestampMS / 1000.0)
-            let dayStart = calendar.startOfDay(for: date)
-            let offsetFromToday = calendar.dateComponents([.day], from: dayStart, to: todayStart).day ?? 0
-            let index = days - 1 - offsetFromToday
-            guard (0..<days).contains(index) else { return }
-            promptBuckets[index] += 1
+
+        // 1. Read CLI history if exists
+        let historyFile = antigravityDir.appendingPathComponent("history.jsonl")
+        if FileManager.default.fileExists(atPath: historyFile.path) {
+            forEachLine(of: historyFile) { line in
+                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let timestampMS = obj["timestamp"] as? Double
+                else { return }
+                let date = Date(timeIntervalSince1970: timestampMS / 1000.0)
+                let dayStart = calendar.startOfDay(for: date)
+                let offsetFromToday = calendar.dateComponents([.day], from: dayStart, to: todayStart).day ?? 0
+                let index = days - 1 - offsetFromToday
+                guard (0..<days).contains(index) else { return }
+                promptBuckets[index] += 1
+            }
         }
+
+        // 2. Read IDE conversation_summaries.db if exists
+        let dbURL = antigravityIDEDir.appendingPathComponent("conversation_summaries.db")
+        if FileManager.default.fileExists(atPath: dbURL.path) {
+            var db: OpaquePointer?
+            let uri = "file:\(dbURL.path)?immutable=1"
+            if sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK {
+                let sql = "SELECT step_count, last_modified_time, last_user_input_time FROM conversation_summaries"
+                var stmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                    while sqlite3_step(stmt) == SQLITE_ROW {
+                        let stepCount = Int(sqlite3_column_int(stmt, 0))
+                        let modStr = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+                        let inputStr = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
+                        let date = parseSQLiteDate(modStr) ?? parseSQLiteDate(inputStr)
+                        guard let date else { continue }
+                        let dayStart = calendar.startOfDay(for: date)
+                        let offsetFromToday = calendar.dateComponents([.day], from: dayStart, to: todayStart).day ?? 0
+                        let index = days - 1 - offsetFromToday
+                        guard (0..<days).contains(index) else { continue }
+                        promptBuckets[index] += max(1, stepCount)
+                    }
+                    sqlite3_finalize(stmt)
+                }
+                sqlite3_close(db)
+            }
+        }
+
         let costBuckets = promptBuckets.map { count -> Double in
             var u = AntigravityUsage()
             u.totalPrompts = count
@@ -1466,13 +1597,15 @@ enum UsageReader {
     }
 
     /// Antigravity stores quota responses in different cache locations across
-    /// CLI versions. Read only JSON responses that contain the stable
+    /// CLI and IDE versions. Read JSON responses that contain the stable
     /// remainingFraction/resetTime pair, and classify the two windows by the
     /// time until reset (short = 5-hour, long = weekly).
     static let antigravityQuotaRoots: [URL] = [
         antigravityDir.appendingPathComponent("cache"),
         antigravityDir.appendingPathComponent("state"),
-        antigravityDir
+        antigravityDir,
+        antigravityIDEDir.appendingPathComponent("cache"),
+        AntigravityLimitsReader.quotaSummaryCacheURL.deletingLastPathComponent(),
     ]
 
     /// Both windows come out of one pass. Reading and JSON-parsing every
