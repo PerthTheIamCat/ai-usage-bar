@@ -56,6 +56,14 @@ func humanReset(_ date: Date?) -> String {
     return humanDuration(secs)
 }
 
+/// The wall-clock time of a reset: "13:02" within the next day, otherwise
+/// with the weekday ("Sun 13:02") so a weekly reset isn't ambiguous.
+func resetClock(_ date: Date, now: Date = Date()) -> String {
+    let time = date.formatted(date: .omitted, time: .shortened)
+    if date.timeIntervalSince(now) < 20 * 3600, Calendar.current.isDate(date, inSameDayAs: now) { return time }
+    return date.formatted(.dateTime.weekday(.abbreviated)) + " " + time
+}
+
 /// "3d 17h" / "4h 12m" / "9m" for a positive duration in seconds.
 func humanDuration(_ secs: Double) -> String {
     let s = Int(max(0, secs))

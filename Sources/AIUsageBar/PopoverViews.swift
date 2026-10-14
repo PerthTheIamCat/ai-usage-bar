@@ -6,13 +6,16 @@ import AppKit
 
 private struct LimitBarRepresentable: NSViewRepresentable {
     let remainingPercent: Double
+    var warnBelow: Double?
     func makeNSView(context: Context) -> LimitBarView {
         let v = LimitBarView()
         v.remainingPercent = remainingPercent
+        v.warnBelow = warnBelow
         return v
     }
     func updateNSView(_ nsView: LimitBarView, context: Context) {
         nsView.remainingPercent = remainingPercent
+        nsView.warnBelow = warnBelow
     }
 }
 
@@ -190,10 +193,16 @@ struct LimitRow: View {
     let window: LimitWindow
     var provider: ProviderKind?
     var windowKind: LimitWindowKind?
+    var group: String?
+
+    private var warnBelow: Double? {
+        guard let provider, let windowKind else { return nil }
+        return AppSettings.shared.warnBelow(provider, windowKind)
+    }
 
     private var forecast: BurnRateTracker.Forecast? {
         guard let provider, let windowKind else { return nil }
-        return BurnRateTracker.forecast(provider, windowKind, resetsAt: window.resetsAt)
+        return BurnRateTracker.forecast(provider, windowKind, resetsAt: window.resetsAt, group: group, currentPercent: window.usedPercent)
     }
 
     var body: some View {
@@ -204,25 +213,25 @@ struct LimitRow: View {
                 Spacer()
                 Text((window.isEstimated ? "~" : "") + AppSettings.shared.displayMode.rowText(remaining: remaining))
                     .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Color(nsColor: limitColor(remaining)))
+                    .foregroundStyle(Color(nsColor: limitColor(remaining, warnBelow: warnBelow)))
             }
-            LimitBarRepresentable(remainingPercent: remaining)
+            LimitBarRepresentable(remainingPercent: remaining, warnBelow: warnBelow)
                 .frame(height: 5)
-            // At the current pace this window will hit 100% before it resets
-            // — the single most-requested thing across every comparable
-            // tool. Takes priority over the plain reset caption because it's
-            // the more actionable fact when it applies.
-            if let forecast = forecast?.willDepleteBeforeReset == true ? forecast : nil {
-                Text("⚠︎ at this pace, hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened)) — before it resets")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.orange)
-            } else if let reset = window.resetsAt {
-                // The Claude Desktop snapshot carries percentages but no
-                // reset time, so this caption used to read "resets in —"
-                // forever. Say something useful or say nothing.
-                Text("resets in \(humanReset(reset))")
+            // The reset caption always shows (with the actual clock time, so
+            // the warning below can't be misread). The Claude Desktop
+            // snapshot carries percentages but no reset time, so that case
+            // falls through to the other captions.
+            if let reset = window.resetsAt {
+                Text("resets in \(humanReset(reset)) · \(resetClock(reset))")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
+                // At the current pace this window will hit 100% before it
+                // resets — the most actionable fact when it applies.
+                if let forecast = forecast, forecast.willDepleteBeforeReset {
+                    Text("⚠︎ at this pace, hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened)) — before it resets")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.orange)
+                }
             } else if let desc = window.resetDescription, !desc.isEmpty {
                 Text(desc)
                     .font(.system(size: 10.5))
@@ -240,12 +249,12 @@ struct LimitRow: View {
 /// A limit window row, or a "window reset" note in its place once the
 /// stored percentage has rolled past its reset time and is meaningless.
 @ViewBuilder
-func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil) -> some View {
+func limitRowOrNote(_ name: String, _ w: LimitWindow, provider: ProviderKind? = nil, windowKind: LimitWindowKind? = nil, group: String? = nil) -> some View {
     if let r = w.resetsAt, r <= Date() {
         let appName = (provider == .antigravity) ? "Antigravity" : ((provider == .codex) ? "Codex" : "Claude Code")
         NoteText(text: "\(name): window reset — use \(appName) for a fresh reading")
     } else {
-        LimitRow(name: name, window: w, provider: provider, windowKind: windowKind)
+        LimitRow(name: name, window: w, provider: provider, windowKind: windowKind, group: group)
     }
 }
 
@@ -341,6 +350,7 @@ struct AntigravityStatusLineSetupPrompt: View {
 private struct MiniLimitRow: View {
     let label: String
     let window: LimitWindow
+    var warnBelow: Double?
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
@@ -349,7 +359,7 @@ private struct MiniLimitRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .frame(width: 46, alignment: .leading)
-            LimitBarRepresentable(remainingPercent: window.remainingPercent)
+            LimitBarRepresentable(remainingPercent: window.remainingPercent, warnBelow: warnBelow)
                 .frame(height: 5)
             // The meter already fills according to the display mode, so the
             // number has to follow it — printing "left" next to a bar drawn
@@ -357,7 +367,7 @@ private struct MiniLimitRow: View {
             // menu bar.
             Text((window.isEstimated ? "~" : "") + settings.displayMode.shortText(remaining: window.remainingPercent))
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Color(nsColor: limitColor(window.remainingPercent)))
+                .foregroundStyle(Color(nsColor: limitColor(window.remainingPercent, warnBelow: warnBelow)))
                 .frame(width: 40, alignment: .trailing)
         }
     }
@@ -388,7 +398,7 @@ private struct ProviderSummaryCard: View {
     /// anything useful about it.
     private var fiveHourForecast: BurnRateTracker.Forecast? {
         guard let w = fiveHour else { return nil }
-        return BurnRateTracker.forecast(kind, .fiveHour, resetsAt: w.resetsAt)
+        return BurnRateTracker.forecast(kind, .fiveHour, resetsAt: w.resetsAt, currentPercent: w.usedPercent)
     }
 
     var body: some View {
@@ -413,8 +423,8 @@ private struct ProviderSummaryCard: View {
                     NoteText(text: "No limit data yet")
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
-                        if let w = fiveHour { MiniLimitRow(label: "5-hour", window: w) }
-                        if let w = weekly { MiniLimitRow(label: "Weekly", window: w) }
+                        if let w = fiveHour { MiniLimitRow(label: "5-hour", window: w, warnBelow: AppSettings.shared.warnBelow(kind, .fiveHour)) }
+                        if let w = weekly { MiniLimitRow(label: "Weekly", window: w, warnBelow: AppSettings.shared.warnBelow(kind, .weekly)) }
                     }
                     if let forecast = fiveHourForecast, forecast.willDepleteBeforeReset {
                         Text("⚠︎ 5-hour hits the limit around \(forecast.etaToFull.formatted(date: .omitted, time: .shortened))")
@@ -448,6 +458,7 @@ private struct HeroRemainingCard: View {
     let providerTitle: String
     let windowLabel: String
     let window: LimitWindow
+    var warnBelow: Double?
     @ObservedObject private var settings = AppSettings.shared
 
     /// The window shown is the same either way — it is the tightest one. Only
@@ -464,7 +475,7 @@ private struct HeroRemainingCard: View {
                     .stroke(Color.secondary.opacity(0.15), lineWidth: 7)
                 Circle()
                     .trim(from: 0, to: max(0.003, shownFraction))
-                    .stroke(Color(nsColor: limitColor(window.remainingPercent)),
+                    .stroke(Color(nsColor: limitColor(window.remainingPercent, warnBelow: warnBelow)),
                             style: StrokeStyle(lineWidth: 7, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Text(settings.displayMode.shortText(remaining: window.remainingPercent))
@@ -595,12 +606,17 @@ struct OverviewPane: View {
         return best
     }
 
+    private var tightestWarnBelow: Double {
+        guard let tightest else { return AppSettings.shared.warnBelowRemaining }
+        return AppSettings.shared.warnBelow(tightest.kind, tightest.label == "5-hour" ? .fiveHour : .weekly)
+    }
+
     /// The best case for "switch to this instead" among every OTHER
     /// provider's tightest window. Only surfaced when the current top pick
     /// is genuinely tight and the alternative has a real margin over it —
     /// otherwise this would just be noise on every visit to Overview.
     private var switchSuggestion: (kind: ProviderKind, title: String, remainingPercent: Double)? {
-        guard let tightest, tightest.window.remainingPercent < AppSettings.shared.warnBelowRemaining else { return nil }
+        guard let tightest, tightest.window.remainingPercent < tightestWarnBelow else { return nil }
         var best: (kind: ProviderKind, title: String, remainingPercent: Double)?
         for card in cards where card.kind != tightest.kind {
             for w in [card.fiveHour, card.weekly].compactMap({ $0 }) {
@@ -622,7 +638,7 @@ struct OverviewPane: View {
                 PaneHeader(title: "Overview")
 
                 if let tightest {
-                    HeroRemainingCard(providerTitle: tightest.title, windowLabel: tightest.label, window: tightest.window)
+                    HeroRemainingCard(providerTitle: tightest.title, windowLabel: tightest.label, window: tightest.window, warnBelow: tightestWarnBelow)
                 }
 
                 if let suggestion = switchSuggestion {
@@ -897,10 +913,10 @@ struct AntigravityPane: View {
                 ForEach(g.groups) { group in
                     CaptionText(title: group.name, info: group.description)
                     if settings.isLimitWindowShown(.fiveHour, for: .antigravity), let w = group.fiveHour {
-                        limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour)
+                        limitRowOrNote("5-hour", w, provider: .antigravity, windowKind: .fiveHour, group: group.id)
                     }
                     if settings.isLimitWindowShown(.weekly, for: .antigravity), let w = group.weekly {
-                        limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly)
+                        limitRowOrNote("Weekly", w, provider: .antigravity, windowKind: .weekly, group: group.id)
                     }
                     if !settings.isLimitWindowShown(.fiveHour, for: .antigravity)
                         && !settings.isLimitWindowShown(.weekly, for: .antigravity) {
@@ -1140,6 +1156,7 @@ struct PopoverFooter: View {
     let onExportJSON: () -> Void
     let onExportCSV: () -> Void
     let onSaveCSV: () -> Void
+    let onSaveDailyHistoryCSV: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
@@ -1195,6 +1212,7 @@ struct PopoverFooter: View {
                     Button("Copy CSV") { copy(onExportCSV) }
                     Divider()
                     Button("Save CSV…", action: onSaveCSV)
+                    Button("Save daily history CSV…", action: onSaveDailyHistoryCSV)
                 } label: {
                     Label(justCopied ? "Copied!" : "Export…", systemImage: "square.and.arrow.up")
                 }
@@ -1222,6 +1240,7 @@ struct PopoverContentView: View {
     let onExportJSON: () -> Void
     let onExportCSV: () -> Void
     let onSaveCSV: () -> Void
+    let onSaveDailyHistoryCSV: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
 
@@ -1230,6 +1249,7 @@ struct PopoverContentView: View {
         onRefresh: @escaping () -> Void, onCheckForUpdates: @escaping () -> Void,
         onExportReport: @escaping () -> Void, onExportJSON: @escaping () -> Void,
         onExportCSV: @escaping () -> Void, onSaveCSV: @escaping () -> Void,
+        onSaveDailyHistoryCSV: @escaping () -> Void,
         onSettings: @escaping () -> Void, onQuit: @escaping () -> Void
     ) {
         self.viewModel = viewModel
@@ -1240,6 +1260,7 @@ struct PopoverContentView: View {
         self.onExportJSON = onExportJSON
         self.onExportCSV = onExportCSV
         self.onSaveCSV = onSaveCSV
+        self.onSaveDailyHistoryCSV = onSaveDailyHistoryCSV
         self.onSettings = onSettings
         self.onQuit = onQuit
         if CommandLine.arguments.contains("--antigravity") {
@@ -1289,7 +1310,7 @@ struct PopoverContentView: View {
                     }
                 }
                 .frame(maxHeight: .infinity)
-                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onExportJSON: onExportJSON, onExportCSV: onExportCSV, onSaveCSV: onSaveCSV, onSettings: onSettings, onQuit: onQuit)
+                PopoverFooter(viewModel: viewModel, appVersion: appVersion, onRefresh: onRefresh, onCheckForUpdates: onCheckForUpdates, onExportReport: onExportReport, onExportJSON: onExportJSON, onExportCSV: onExportCSV, onSaveCSV: onSaveCSV, onSaveDailyHistoryCSV: onSaveDailyHistoryCSV, onSettings: onSettings, onQuit: onQuit)
             }
             .frame(width: 380)
         }

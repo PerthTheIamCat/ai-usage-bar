@@ -178,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onExportJSON: { [weak self] in self?.copyUsageJSON() },
             onExportCSV: { [weak self] in self?.copyUsageCSV() },
             onSaveCSV: { [weak self] in self?.saveUsageCSV() },
+            onSaveDailyHistoryCSV: { [weak self] in self?.saveDailyHistoryCSV() },
             onSettings: { [weak self] in self?.settingsClicked() },
             onQuit: { [weak self] in self?.quitClicked() }
         )
@@ -239,6 +240,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 appLog("exported CSV usage report to \(url.lastPathComponent)")
             } catch {
                 appLog("CSV export failed — \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func saveDailyHistoryCSV() {
+        let panel = NSSavePanel()
+        panel.title = "Export Daily History CSV"
+        panel.nameFieldStringValue = "ai-usage-daily-history-\(Date().formatted(.dateTime.year().month().day())).csv"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try DailyHistoryStore.generateCSV().write(to: url, atomically: true, encoding: .utf8)
+                appLog("exported daily history CSV to \(url.lastPathComponent)")
+            } catch {
+                appLog("daily history CSV export failed — \(error.localizedDescription)")
             }
         }
     }
@@ -523,6 +539,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let w = snap.codexLimits?.secondary { BurnRateTracker.record(.codex, .weekly, usedPercent: w.usedPercent) }
         if let w = snap.antigravity?.fiveHour { BurnRateTracker.record(.antigravity, .fiveHour, usedPercent: w.usedPercent) }
         if let w = snap.antigravity?.weekly { BurnRateTracker.record(.antigravity, .weekly, usedPercent: w.usedPercent) }
+        for g in snap.antigravity?.groups ?? [] {
+            if let w = g.fiveHour { BurnRateTracker.record(.antigravity, .fiveHour, usedPercent: w.usedPercent, group: g.id) }
+            if let w = g.weekly { BurnRateTracker.record(.antigravity, .weekly, usedPercent: w.usedPercent, group: g.id) }
+        }
     }
 
     // MARK: - Status bar title
@@ -593,14 +613,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windows = kind.supportedLimitWindows.filter {
             settings.isLimitWindowShown($0, for: kind)
         }.map {
-            MenuBarWindow(kind: $0, remainingPercent: $0 == .fiveHour ? fiveHour : weekly)
+            MenuBarWindow(kind: $0, remainingPercent: $0 == .fiveHour ? fiveHour : weekly,
+                          warnBelow: settings.warnBelow(kind, $0))
         }
         let details = windows.map { window in
             let value = window.validRemaining.map { settings.displayMode.rowText(remaining: $0) } ?? "unavailable"
             return "\(window.kind.displayName): \(value)"
         }.joined(separator: ", ")
         return StatusBarPart(icon: icon, text: fallback, windows: windows,
-                             warning: windows.contains { ($0.validRemaining ?? 100) < settings.warnBelowRemaining },
+                             warning: windows.contains { ($0.validRemaining ?? 100) < ($0.warnBelow ?? settings.warnBelowRemaining) },
                              style: settings.limitStyle(for: kind),
                              accessibilityText: "\(kind.displayName): \(windows.isEmpty ? fallback : details)\(stateDescription)")
     }
@@ -653,7 +674,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.setAccessibilityLabel(description)
         let signature = parts.map { part in
             let meters = part.windows.map {
-                "\($0.kind.rawValue):\($0.validRemaining.map { String(format: "%.1f", $0) } ?? "-")"
+                "\($0.kind.rawValue):\($0.validRemaining.map { String(format: "%.1f", $0) } ?? "-"):\($0.warnBelow ?? -1)"
             }.joined(separator: ",")
             return "\(part.accessibilityText)|\(meters)|\(part.warning)|\(part.style?.rawValue ?? "-")"
         }.joined(separator: "#") + "@\(font.pointSize)|\(settings.displayMode.rawValue)|\(settings.warnBelowRemaining)"
