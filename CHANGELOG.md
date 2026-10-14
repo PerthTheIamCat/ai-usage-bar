@@ -4,6 +4,10 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Multiple accounts:** Settings → Accounts adds extra Claude Code and Codex accounts, each read from its own config folder (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). Each shows its own limits and today's usage under "Other accounts" in the popover. Extra Claude accounts get their own status-line bridge from the same tab.
+
 ## [0.14.0] - 2026-10-13
 
 ### Added

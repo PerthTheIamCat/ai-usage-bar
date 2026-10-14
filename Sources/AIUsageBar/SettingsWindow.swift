@@ -12,6 +12,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             ProvidersTab()
                 .tabItem { Label("Providers", systemImage: "arrow.up.arrow.down") }
+            AccountsTab()
+                .tabItem { Label("Accounts", systemImage: "person.2") }
             CostTab()
                 .tabItem { Label("Cost", systemImage: "dollarsign.circle") }
             LogTab()

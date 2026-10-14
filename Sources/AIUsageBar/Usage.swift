@@ -169,6 +169,8 @@ struct UsageSnapshot {
     var hourlyUsage = HourlyUsage()
     var periodCosts: PeriodCosts?
     var dailyTrend: DailyTrend?
+    /// Extra accounts added in Settings → Accounts, in the order added.
+    var accounts: [AccountReading] = []
     var updatedAt = Date()
 }
 

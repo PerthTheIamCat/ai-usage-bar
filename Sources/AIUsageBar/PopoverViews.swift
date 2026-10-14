@@ -376,6 +376,10 @@ private struct ProviderSummaryCard: View {
     let weekly: LimitWindow?
     let problem: String?
     let todayLine: String?
+    /// An extra account's card: it has no detail pane to open and no recorded
+    /// reading history, so it shows no chevron and no depletion forecast (the
+    /// forecast is fit from the default account's readings for this provider).
+    var isAccount = false
     let onTap: () -> Void
 
     private var tightest: LimitWindow? {
@@ -387,7 +391,7 @@ private struct ProviderSummaryCard: View {
     /// weekly window drifts too slowly for a 45-minute pace window to say
     /// anything useful about it.
     private var fiveHourForecast: BurnRateTracker.Forecast? {
-        guard let w = fiveHour else { return nil }
+        guard !isAccount, let w = fiveHour else { return nil }
         return BurnRateTracker.forecast(kind, .fiveHour, resetsAt: w.resetsAt)
     }
 
@@ -402,9 +406,11 @@ private struct ProviderSummaryCard: View {
                         .foregroundStyle(iconTint ?? Color.primary)
                     Text(title).font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                    if !isAccount {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
 
                 if let problem {
@@ -435,7 +441,7 @@ private struct ProviderSummaryCard: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .panelSurface(cornerRadius: 10, interactive: true)
+            .panelSurface(cornerRadius: 10, interactive: !isAccount)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -533,6 +539,10 @@ struct OverviewPane: View {
         let weekly: LimitWindow?
         let problem: String?
         let todayLine: String?
+        /// Set for an extra account's card.
+        var accountID: String? = nil
+
+        var id: String { accountID ?? kind.rawValue }
     }
 
     private func shown(_ windowKind: LimitWindowKind, for kind: ProviderKind, _ window: LimitWindow?) -> LimitWindow? {
@@ -575,12 +585,53 @@ struct OverviewPane: View {
         }
     }
 
+    /// One card per extra account, under the default providers' cards.
+    private var accountCards: [Card] {
+        snap.accounts.compactMap { reading -> Card? in
+            let account = reading.account
+            guard settings.isShownInPopover(account.provider) else { return nil }
+            switch account.provider {
+            case .claude:
+                let limits = reading.claudeLimits
+                let isUsable: Bool = { if case .ok = limits?.state { return true }; return false }()
+                let problem: String? = {
+                    switch limits?.state {
+                    case .ok?: return nil
+                    case .stale?: return "Last reading is stale — use Claude Code in this account to refresh"
+                    default: return "No reading yet — set up its status line in Settings → Accounts"
+                    }
+                }()
+                let today = reading.claude.map {
+                    "\(formatTokens($0.total)) tokens · \(formatUSD(Pricing.claudeCostUSD($0))) today"
+                } ?? "No Claude logs found at \(account.path)"
+                return Card(
+                    kind: .claude, title: account.title,
+                    fiveHour: isUsable ? shown(.fiveHour, for: .claude, limits?.fiveHour) : nil,
+                    weekly: isUsable ? shown(.weekly, for: .claude, limits?.sevenDay) : nil,
+                    problem: problem, todayLine: today, accountID: account.id)
+            case .codex:
+                let limits = reading.codexLimits
+                let today = reading.codex.map {
+                    "\(formatTokens($0.totalTokens)) tokens · \(formatUSD(Pricing.codexCostUSD($0))) today"
+                } ?? "No Codex sessions found at \(account.path)"
+                return Card(
+                    kind: .codex, title: account.title,
+                    fiveHour: shown(.fiveHour, for: .codex, limits?.primary),
+                    weekly: shown(.weekly, for: .codex, limits?.secondary),
+                    problem: limits == nil ? "No limit data yet — run codex with this account once" : nil,
+                    todayLine: today, accountID: account.id)
+            case .antigravity:
+                return nil
+            }
+        }
+    }
+
     /// The single tightest (lowest-remaining) window across every card,
     /// ignoring ones already past their reset (meaningless) or hidden by a
     /// problem state.
     private var tightest: (kind: ProviderKind, title: String, label: String, window: LimitWindow)? {
         var best: (kind: ProviderKind, title: String, label: String, window: LimitWindow)?
-        for card in cards {
+        for card in cards + accountCards {
             for (label, w) in [("5-hour", card.fiveHour), ("Weekly", card.weekly)] {
                 // Skip only windows already known to have rolled over. A nil
                 // reset means "unknown", not "expired" — the Claude Desktop
@@ -642,6 +693,20 @@ struct OverviewPane: View {
                             fiveHour: card.fiveHour, weekly: card.weekly,
                             problem: card.problem, todayLine: card.todayLine,
                             onTap: { onSelectProvider(card.kind) })
+                    }
+                }
+                if !accountCards.isEmpty {
+                    Text("Other accounts")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(accountCards, id: \.id) { card in
+                        ProviderSummaryCard(
+                            kind: card.kind, title: card.title, icon: card.kind.icon,
+                            iconTint: card.kind == .claude ? Color(nsColor: BrandIcons.claudeBrandColor) : nil,
+                            fiveHour: card.fiveHour, weekly: card.weekly,
+                            problem: card.problem, todayLine: card.todayLine,
+                            isAccount: true,
+                            onTap: {})
                     }
                 }
                 NoteText(text: "Tap a provider for token breakdowns, sessions, and cost trends.")
