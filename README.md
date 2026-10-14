@@ -1,215 +1,45 @@
+<div align="center">
+
+<img src="docs/assets/icon.png" width="112" alt="AI Usage Bar icon">
+
 # AI Usage Bar
 
-> See Claude, Codex, and Antigravity usage before a limit surprises you.
+**See your Claude, Codex and Antigravity limits at a glance, right from the macOS menu bar.**
 
-AI Usage Bar is a small macOS menu-bar app for people who use Claude Code,
-Codex, Antigravity, or any combination of the three. It shows today's token
-activity and the remaining time and percentage in each provider's active
-rate-limit window.
+**English** · [ภาษาไทย](README.th.md)
 
-[Download a preview release](https://github.com/PerthTheIamCat/ai-usage-bar/releases)
-· [Report an issue](https://github.com/PerthTheIamCat/ai-usage-bar/issues)
+[![Download .dmg](https://img.shields.io/badge/Download-v0.15.0%20.dmg-0A84FF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/PerthTheIamCat/ai-usage-bar/releases/latest)
+![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black?style=for-the-badge)
+![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-555?style=for-the-badge)
 
-**Requirements:** macOS 13 or later · Apple Silicon · at least one supported
-provider already installed and signed in. On macOS 26 (Tahoe) the popover's
-panels render as real Liquid Glass; earlier versions get an equivalent
-translucent treatment with no missing functionality.
+<img src="docs/assets/menubar.png" width="320" alt="Menu bar">
 
-## What it shows
+<img src="docs/assets/demo.gif" width="480" alt="Popover demo">
 
-Each provider shows its 5-hour and weekly limits separately. Bars stack with
-5h above W; rings use an outer 5h ring and an inner weekly ring. The
-“+ percent” styles add small labeled values in two rows. Missing readings
-keep a dim track and show `—` when percentages are enabled. Hover over the
-menu bar for full window values and the ring legend. Click it to open the
-popover on **Overview**:
+</div>
 
-- **Lowest remaining** — a headline ring for the single tightest window across
-  every provider, so "how much do I have left right now" never needs
-  hunting for.
-- **A card per provider** — 5-hour and weekly meters, reset time, and today's
-  tokens/cost, nothing more.
-- **A depletion warning** when the current pace projects hitting a window's
-  limit before it resets — fit from recent readings, not a fixed guess.
-- **"Switch there for now"** when one provider is critically low and another
-  has real headroom, with a tap straight to it.
+## Features
 
-Tap a provider's card for the full detail pane: token breakdown, today's
-sessions (skills and tools used, with a per-item cost estimate), model
-breakdown, and 7-/30-day cost trends — all one click away rather than the
-default view. No setup screen for the app itself; it detects local provider
-data from `~/.claude`, `~/.codex`, and Antigravity's CLI/IDE directories on its
-own.
+- **Live limits** – 5-hour and weekly windows for every provider, in the menu bar.
+- **One-click detail** – popover with lowest remaining, reset times, tokens and cost.
+- **Smart hints** – depletion warning and "switch there for now".
+- **Trends** – daily activity and 7 / 30 / 90-day cost charts.
+- **Private** – everything is read locally; no credentials, no network.
 
-## Install and use
+<div align="center">
+<img src="docs/assets/popover-overview.png" width="360" alt="Overview">
+&nbsp;
+<img src="docs/assets/popover-analytics.png" width="360" alt="Analytics">
+</div>
 
-1. Open the [Releases](https://github.com/PerthTheIamCat/ai-usage-bar/releases)
-   page and download the `macos-arm64.dmg` file.
-2. Open the disk image and drag `AIUsageBar.app` onto the **Applications**
-   shortcut.
-3. Open `AIUsageBar.app` from Applications.
-   - If the release is not Developer ID signed and notarized, macOS may block
-     the first launch: Control-click the app, choose **Open**, then confirm
-     **Open**.
-4. Claude reads work differently depending on how you use Claude:
-   - **Claude Desktop app** — nothing to configure. AI Usage Bar reads its
-     local plan-usage file directly; open the popover after using Claude once
-     and a reading appears.
-   - **Claude Code (CLI)** — needs the local statusLine bridge once. The
-     popover's Overview pane shows a **Set Up Status Line Bridge** button when
-     no reading exists yet; it installs the bridge script and adds the
-     `statusLine` entry to `~/.claude/settings.json` itself, backing the file
-     up first and never touching an existing different `statusLine` command.
-     To do it by hand instead, run `./Scripts/install-claude-statusline.sh`
-     after placing the app in `/Applications` (set `AI_USAGE_BAR_BIN` first
-     for a custom app location) — it only installs the bridge script and
-     prints the snippet to add yourself.
-   - **Antigravity CLI** — the Overview pane offers a **Set Up CLI Status
-     Line** action when no quota reading exists. It adds a command to
-     `~/.gemini/antigravity-cli/settings.json`, preserves the built-in line,
-     and backs up an existing settings file before changing it. Use
-     Antigravity once after restarting the CLI so the app receives its quota.
-     **Antigravity IDE** conversations are detected from their local database
-     automatically. The IDE does not persist the CLI status-line quota payload,
-     so its pane shows activity while quota rows remain unavailable.
-5. Click the menu-bar icon whenever you want the detailed breakdown. Press
-   `⌘R` or choose **Refresh Now** to reread local snapshots.
-6. From version 0.2.0 onward, the app checks for updates automatically. Use
-   **Check for Updates…** from the menu whenever you want to check now.
+## Install
 
-To start it automatically: **System Settings → General → Login Items → Add**
-`AIUsageBar.app`.
+1. [Download the latest `.dmg`](https://github.com/PerthTheIamCat/ai-usage-bar/releases/latest).
+2. Open it and drag **AIUsageBar** to **Applications**.
+3. **Control-click → Open** the first time (the app is ad-hoc signed).
 
-## How data is handled
+Then click the menu-bar icon. For Claude Code, press **Set Up Status Line Bridge** once in the popover.
 
-| Provider | Today's usage | Rate-limit reading |
-| --- | --- | --- |
-| Claude | Local Claude Code session logs | Claude Code's local `statusLine` snapshot, or the Claude Desktop app's own local usage file — whichever is fresher |
-| Codex | Local Codex session logs | Latest `rate_limits` entry written by Codex |
-| Antigravity | Local activity data from CLI history or IDE conversation databases | Antigravity CLI status-line snapshot (with local cache fallback) |
+## More
 
-The app never reads, refreshes, rotates, or writes Claude credentials. Claude
-limit snapshots contain only the `rate_limits` fields supplied to the local
-status-line command (or the used-percentage fields from the Desktop app's own
-file); prompt and transcript content is never stored. Codex readings are
-local and are only as fresh as the latest Codex session that wrote them.
-
-Claude's status-line source and Antigravity's status-line snapshot are watched
-directly, so a new reading is picked up within seconds rather than waiting for
-the next refresh. If neither Claude source has supplied a reading for 30
-minutes, AI Usage Bar marks Claude's value stale and keeps the last known
-value; it never falls back to an HTTP request. The Antigravity pane shows the
-observation age for its cached reading. The Desktop app
-samples every few minutes rather than continuously — between its samples,
-the 5-hour figure is projected forward from Claude Code tokens logged since
-the last sample (shown with a leading `~`), calibrated from your own recent
-readings rather than an assumed formula. The Desktop app's file carries no
-reset time, unlike the statusLine bridge's `rate_limits` payload, so a
-Desktop-only reading has no "resets in" caption. See the
-[Claude Code status line documentation](https://code.claude.com/docs/en/statusline).
-
-The provider panes show the three most recent sessions today; the full list
-is available through **Export…**. Claude session titles use the manually-set
-`customTitle` when present, falling back to Claude's automatic `ai-title`;
-Codex sessions fall back to the workspace name, since Codex does not write a
-title of its own. Expand an individual session to see the named Claude
-skills and tools recorded in its local log. Codex tool calls are read from
-`function_call` / `custom_tool_call` records; Codex skills are marked
-**inferred** when a tool argument references a `SKILL.md` file because Codex
-does not emit a dedicated skill event. Only session titles, IDs, timestamps,
-token totals, names, counts, and derived cost estimates are used for this
-view — prompt text and tool arguments are not saved or displayed by AI Usage
-Bar.
-
-Claude's 7-/30-day cost totals and the Analytics trend chart are backed by a
-local day-by-day history file. Claude Code (and Codex) prune local session
-logs after roughly a month; each day's totals are captured to that file the
-first time they're observed with real activity, so a day's numbers survive
-even after its source log is gone.
-
-## Customize providers and reports
-
-Open **Settings → Providers** to configure every supported provider (Claude
-Code, Codex, and Antigravity) independently:
-
-- reorder providers and show/hide them separately in the menu bar and popover;
-- choose a menu-bar style per provider: Bar, Ring, Percent only, Bar + percent,
-  Ring + percent, or Dot + percent;
-- choose used or remaining percentages (used by default; saved choices are preserved);
-- choose which rate-limit windows and detail rows each provider exposes.
-
-The popover's **Export…** menu can copy a Markdown report, JSON, or CSV, or
-save a CSV file. JSON/CSV exports include session-level skill/tool cost
-estimates. In **Settings → General**, session alerts can notify when a session
-crosses a token threshold, while privacy toggles hide session IDs and workspace
-names from the popover and exports. Session summaries are cached by local log
-file fingerprint so refreshes do not rescan unchanged files.
-On startup, today's provider data is shown before the heavier 7-/30-day cost
-and trend scan finishes; the menu bar and popover footer show the current
-loading phase while that background work runs.
-
-## Multiple accounts
-
-The default `~/.claude` and `~/.codex` accounts are always shown. To track
-another account, give it its own config folder — run Claude Code with
-`CLAUDE_CONFIG_DIR=~/.claude-work` or Codex with `CODEX_HOME=~/.codex-work` —
-and add that folder in **Settings → Accounts**. Each extra account appears
-under "Other accounts" in the popover with its own limits and today's usage.
-For an extra Claude account, use **Set Up Status Line** on its row; that
-installs a bridge in the account's folder that writes to a separate snapshot,
-so readings never mix between accounts. Extra accounts are popover-only: the
-menu bar, history charts, and alerts follow the default accounts. Antigravity
-supports a single account.
-
-## Limits to know
-
-- Release builds currently target Apple Silicon (`arm64`) only.
-- A Codex limit window may be stale until you open Codex again.
-- Claude limit data may be stale until Claude Code produces another
-  status-line update, or the Desktop app writes its next sample.
-- The depletion warning and the between-sample Claude projection are both
-  fit from your own recent readings, not a published formula — early on, or
-  right after a long idle stretch, there may not be enough recent signal for
-  either to say anything yet.
-- Releases are Developer ID signed and notarized only when the maintainer has
-  configured the Apple signing secrets for the release workflow; otherwise they
-  are ad-hoc signed and the first install needs the Control-click → **Open**
-  step above.
-- **Updating from a version before 0.10.0**: the app's bundle identifier
-  changed (a macOS-side issue was preventing some installs from ever getting
-  a menu bar icon at all — see the 0.10.0 release notes). The in-app updater
-  cannot bridge that change, so update by downloading the ZIP and replacing
-  `AIUsageBar.app` by hand once; your settings carry over automatically on
-  first launch.
-
-## Build from source
-
-```sh
-swift build -c release
-./make-app.sh
-open AIUsageBar.app
-
-# Print current readings without opening the menu-bar UI
-.build/release/AIUsageBar --dump
-
-# Run the test suite (pure-logic coverage: burn-rate regression, the daily-
-# history backfill, the byte-scan log scanner, Claude's calibration math)
-swift test
-```
-
-## Releases for maintainers
-
-Push a version tag such as `v0.2.1`. GitHub Actions builds an Apple Silicon ZIP
-and SHA-256 checksum, publishes a prerelease, then signs and deploys the
-Sparkle update feed to GitHub Pages. The private Sparkle key is stored only as
-the `SPARKLE_PRIVATE_KEY` repository secret; never commit it. For a tag that
-already exists, run **Publish release** manually from GitHub Actions and enter
-the tag name.
-
-```sh
-./make-release.sh 0.2.1 3
-```
-
-## License
-
-[MIT](LICENSE)
+Full guide, data handling, multiple accounts, build from source: [docs/DETAILS.md](docs/DETAILS.md) · [Changelog](CHANGELOG.md) · [Issues](https://github.com/PerthTheIamCat/ai-usage-bar/issues) · [MIT License](LICENSE)
