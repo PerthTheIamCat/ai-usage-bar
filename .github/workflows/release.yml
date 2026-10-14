@@ -87,7 +87,7 @@ jobs:
           fi
           ./make-release.sh "${TAG_NAME#v}" "$BUILD_NUMBER"
 
-      - name: Create or update prerelease
+      - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ inputs.tag || github.ref_name }}
@@ -116,12 +116,12 @@ jobs:
             gh release edit "$TAG_NAME" \
               --title "$TAG_NAME" \
               --notes-file "$notes_file" \
-              --prerelease
+              --prerelease=false
           else
             gh release create "$TAG_NAME" "${assets[@]}" \
               --title "$TAG_NAME" \
               --notes-file "$notes_file" \
-              --prerelease
+              --latest
           fi
 
       - name: Generate signed update feed
