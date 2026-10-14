@@ -4,6 +4,10 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **DMG release asset:** `make-release.sh` now also builds a drag-to-Applications `.dmg` next to the `.zip`.
+
 ### Fixed
 
 - **Wrong "hits the limit" time:** Antigravity model groups (Gemini, Claude/GPT) no longer share one pace history, so a quiet group can't inherit another's projection. Pace is also ignored when it disagrees with the percentage on screen, the reading is stale, or the climb is negligible.
