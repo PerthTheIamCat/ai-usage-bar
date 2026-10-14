@@ -48,13 +48,13 @@ final class UsageNotifier {
 
     func check(_ snap: UsageSnapshot) {
         guard AppSettings.shared.notificationsEnabled else { return }
-        let warnBelow = AppSettings.shared.warnBelowRemaining
-        checkWindow(key: "claude-5h", name: "Claude 5-hour window", window: snap.claudeLimits?.fiveHour, warnBelow: warnBelow)
-        checkWindow(key: "claude-week", name: "Claude weekly window", window: snap.claudeLimits?.sevenDay, warnBelow: warnBelow)
-        checkWindow(key: "codex-5h", name: "Codex 5-hour window", window: snap.codexLimits?.primary, warnBelow: warnBelow)
-        checkWindow(key: "codex-week", name: "Codex weekly window", window: snap.codexLimits?.secondary, warnBelow: warnBelow)
-        checkWindow(key: "antigravity-5h", name: "Antigravity 5-hour window", window: snap.antigravity?.fiveHour, warnBelow: warnBelow)
-        checkWindow(key: "antigravity-week", name: "Antigravity weekly window", window: snap.antigravity?.weekly, warnBelow: warnBelow)
+        let s = AppSettings.shared
+        checkWindow(key: "claude-5h", name: "Claude 5-hour window", window: snap.claudeLimits?.fiveHour, warnBelow: s.warnBelow(.claude, .fiveHour))
+        checkWindow(key: "claude-week", name: "Claude weekly window", window: snap.claudeLimits?.sevenDay, warnBelow: s.warnBelow(.claude, .weekly))
+        checkWindow(key: "codex-5h", name: "Codex 5-hour window", window: snap.codexLimits?.primary, warnBelow: s.warnBelow(.codex, .fiveHour))
+        checkWindow(key: "codex-week", name: "Codex weekly window", window: snap.codexLimits?.secondary, warnBelow: s.warnBelow(.codex, .weekly))
+        checkWindow(key: "antigravity-5h", name: "Antigravity 5-hour window", window: snap.antigravity?.fiveHour, warnBelow: s.warnBelow(.antigravity, .fiveHour))
+        checkWindow(key: "antigravity-week", name: "Antigravity weekly window", window: snap.antigravity?.weekly, warnBelow: s.warnBelow(.antigravity, .weekly))
         checkDepletion(key: "deplete-claude-5h", name: "Claude 5-hour window", provider: .claude, window: snap.claudeLimits?.fiveHour)
         checkDepletion(key: "deplete-codex-5h", name: "Codex 5-hour window", provider: .codex, window: snap.codexLimits?.primary)
         checkDepletion(key: "deplete-antigravity-5h", name: "Antigravity 5-hour window", provider: .antigravity, window: snap.antigravity?.fiveHour)

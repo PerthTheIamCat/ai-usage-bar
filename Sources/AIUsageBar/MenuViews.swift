@@ -9,9 +9,10 @@ enum MenuMetrics {
 }
 
 /// Traffic-light color for a remaining-capacity percentage. The red threshold
-/// follows the user's warning setting; orange covers the band above it.
-func limitColor(_ remainingPercent: Double) -> NSColor {
-    if remainingPercent < AppSettings.shared.warnBelowRemaining { return .systemRed }
+/// follows the user's warning setting (or the given per-window `warnBelow`
+/// override); orange covers the band above it.
+func limitColor(_ remainingPercent: Double, warnBelow: Double? = nil) -> NSColor {
+    if remainingPercent < (warnBelow ?? AppSettings.shared.warnBelowRemaining) { return .systemRed }
     if remainingPercent < 50 { return .systemOrange }
     return .systemGreen
 }
@@ -128,9 +129,10 @@ func drawDotMeter(in rect: NSRect, remainingPercent: Double, color: NSColor) {
 /// tracks how close the limit is. Hosted via `NSViewRepresentable`.
 final class LimitBarView: NSView {
     var remainingPercent: Double = 0 { didSet { needsDisplay = true } }
+    var warnBelow: Double? { didSet { needsDisplay = true } }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawCapsuleMeter(in: bounds, remainingPercent: remainingPercent, color: limitColor(remainingPercent))
+        drawCapsuleMeter(in: bounds, remainingPercent: remainingPercent, color: limitColor(remainingPercent, warnBelow: warnBelow))
     }
 }
 
@@ -138,6 +140,8 @@ final class LimitBarView: NSView {
 struct MenuBarWindow {
     let kind: LimitWindowKind
     let remainingPercent: Double?
+    /// Per-window red threshold; nil follows the `warnBelow` passed to `MiniMeter`.
+    var warnBelow: Double? = nil
 
     var label: String { kind == .fiveHour ? "5h" : "W" }
     var validRemaining: Double? {
@@ -184,7 +188,7 @@ enum MiniMeter {
         return NSImage(size: size, flipped: false) { _ in
             for (index, window) in windows.enumerated() {
                 let remaining = window.validRemaining
-                let color: NSColor = remaining.map { $0 < warnBelow ? .systemRed : MenuBarMeterPalette.fill } ?? MenuBarMeterPalette.secondaryLabel
+                let color: NSColor = remaining.map { $0 < (window.warnBelow ?? warnBelow) ? .systemRed : MenuBarMeterPalette.fill } ?? MenuBarMeterPalette.secondaryLabel
                 let fraction = remaining.map { (mode == .used ? 100 - $0 : $0) / 100 }
                 let y = height - CGFloat(index + 1) * rowHeight
                 let trackColor: NSColor = remaining == nil ? MenuBarMeterPalette.track.withAlphaComponent(0.45) : MenuBarMeterPalette.track
