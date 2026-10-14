@@ -44,8 +44,8 @@ own.
 ## Install and use
 
 1. Open the [Releases](https://github.com/PerthTheIamCat/ai-usage-bar/releases)
-   page and download the `macos-arm64.zip` file.
-2. Double-click the ZIP, then move `AIUsageBar.app` to `/Applications` if you
+   page and download the `macos-arm64.dmg` file.
+2. Open the DMG, then drag `AIUsageBar.app` to `/Applications` if you
    want to keep it there.
 3. Open `AIUsageBar.app`.
    - Current preview builds use ad-hoc signing. If macOS blocks the first

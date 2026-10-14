@@ -44,8 +44,8 @@ jobs:
           set -euo pipefail
           version="${TAG_NAME#v}"
           assets=(
-            "AIUsageBar-v${version}-macos-arm64.zip"
-            "AIUsageBar-v${version}-macos-arm64.zip.sha256"
+            "AIUsageBar-v${version}-macos-arm64.dmg"
+            "AIUsageBar-v${version}-macos-arm64.dmg.sha256"
           )
           notes_file="release-notes.md"
 
@@ -85,7 +85,7 @@ jobs:
           }
 
           version="${TAG_NAME#v}"
-          archive="AIUsageBar-v${version}-macos-arm64.zip"
+          archive="AIUsageBar-v${version}-macos-arm64.dmg"
           site="site"
           feed_url="https://perththeiamcat.github.io/ai-usage-bar/appcast.xml"
           download_prefix="https://github.com/PerthTheIamCat/ai-usage-bar/releases/download/${TAG_NAME}/"
@@ -93,7 +93,7 @@ jobs:
           mkdir -p "$site"
           curl --fail --silent --show-error "$feed_url" -o "$site/appcast.xml" || true
           cp "$archive" "$site/"
-          cp release-notes.md "$site/${archive%.zip}.md"
+          cp release-notes.md "$site/${archive%.dmg}.md"
 
           printf '%s' "$SPARKLE_PRIVATE_KEY" | \
             .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
@@ -112,7 +112,7 @@ jobs:
               --disable-signing-warning \
               "$site/appcast.xml"
 
-          rm "$site/$archive" "$site/${archive%.zip}.md"
+          rm "$site/$archive" "$site/${archive%.dmg}.md"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

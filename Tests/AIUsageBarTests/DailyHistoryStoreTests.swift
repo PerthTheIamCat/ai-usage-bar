@@ -94,4 +94,24 @@ final class DailyHistoryStoreTests: XCTestCase {
         XCTAssertEqual(result.claudeTokens[0], 1000, "first recorded day should survive a later, unrelated record() call")
         XCTAssertEqual(result.claudeTokens[1], 2000, "second recorded day should also survive")
     }
+
+    func testGenerateCSVEmitsOneSortedRowPerRecordedDay() {
+        DailyHistoryStore.record(trend(days: 3, activeIndex: 1, claudeTokens: 2000, claudeCostUSD: 1.5), fileURL: fileURL)
+        DailyHistoryStore.record(trend(days: 3, activeIndex: 0, claudeTokens: 1000, claudeCostUSD: 0.25), fileURL: fileURL)
+
+        let lines = DailyHistoryStore.generateCSV(fileURL: fileURL)
+            .split(separator: "\n").map(String.init)
+
+        XCTAssertEqual(lines.count, 3, "header plus one row per recorded day")
+        XCTAssertEqual(lines[0], "date,claude_tokens,claude_cost_usd,codex_tokens,codex_cost_usd,antigravity_prompts,antigravity_cost_usd")
+        XCTAssertTrue(lines[1].hasSuffix(",1000,0.250000,0,0.000000,0,0.000000"), lines[1])
+        XCTAssertTrue(lines[2].hasSuffix(",2000,1.500000,0,0.000000,0,0.000000"), lines[2])
+        XCTAssertLessThan(lines[1].prefix(10), lines[2].prefix(10), "rows should be oldest first")
+    }
+
+    func testGenerateCSVWithNoHistoryIsHeaderOnly() {
+        let lines = DailyHistoryStore.generateCSV(fileURL: fileURL)
+            .split(separator: "\n")
+        XCTAssertEqual(lines.count, 1)
+    }
 }

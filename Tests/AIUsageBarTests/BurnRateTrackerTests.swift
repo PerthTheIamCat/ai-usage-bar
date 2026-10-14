@@ -130,4 +130,42 @@ final class BurnRateTrackerTests: XCTestCase {
         // No samples recorded for Claude's weekly window either.
         XCTAssertNil(BurnRateTracker.forecast(.claude, .weekly, resetsAt: nil, now: now, defaults: defaults))
     }
+
+    private func climb(group: String?, from: Double, step: Double, now: Date) {
+        for (i, minutesAgo) in [30.0, 20, 10, 0].enumerated() {
+            BurnRateTracker.record(.antigravity, .fiveHour, usedPercent: from + step * Double(i), group: group,
+                                    at: now.addingTimeInterval(-minutesAgo * 60), defaults: defaults)
+        }
+    }
+
+    func testGroupsOfTheSameProviderAndWindowAreIndependent() {
+        let now = Date()
+        climb(group: "Gemini Models", from: 10, step: 10, now: now)
+        climb(group: "Claude and GPT models", from: 0, step: 0, now: now)
+        let reset = now.addingTimeInterval(3 * 3600)
+
+        XCTAssertNotNil(BurnRateTracker.forecast(.antigravity, .fiveHour, resetsAt: reset, group: "Gemini Models", now: now, defaults: defaults))
+        XCTAssertNil(BurnRateTracker.forecast(.antigravity, .fiveHour, resetsAt: reset, group: "Claude and GPT models", now: now, defaults: defaults))
+    }
+
+    func testZeroPercentRowNeverForecasts() {
+        let now = Date()
+        climb(group: nil, from: 10, step: 10, now: now)
+        // History says 40%, but the row on screen reads 0% (e.g. the reading belongs to another window).
+        let forecast = BurnRateTracker.forecast(.antigravity, .fiveHour, resetsAt: now.addingTimeInterval(3 * 3600),
+                                                currentPercent: 0, now: now, defaults: defaults)
+        XCTAssertNil(forecast)
+    }
+
+    func testStaleHistoryDoesNotForecast() {
+        let now = Date()
+        climb(group: nil, from: 10, step: 10, now: now.addingTimeInterval(-40 * 60))
+        XCTAssertNil(BurnRateTracker.forecast(.antigravity, .fiveHour, resetsAt: now.addingTimeInterval(3600), now: now, defaults: defaults))
+    }
+
+    func testResetClockIncludesWeekdayForFarResets() {
+        let now = Date()
+        let later = now.addingTimeInterval(3 * 86400)
+        XCTAssertEqual(resetClock(later, now: now).split(separator: " ").first.map(String.init), later.formatted(.dateTime.weekday(.abbreviated)))
+    }
 }

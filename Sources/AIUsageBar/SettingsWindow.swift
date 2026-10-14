@@ -34,6 +34,13 @@ private struct GeneralTab: View {
     /// stored default — so a picker bound to the default alone looked broken:
     /// changing it never altered the menu bar. This writes through to all
     /// providers, and reports the shared style when they agree.
+    private func warnOverrideBinding(_ kind: ProviderKind, _ window: LimitWindowKind) -> Binding<Double?> {
+        Binding(
+            get: { settings.warnBelowOverride(kind, window) },
+            set: { settings.setWarnBelowOverride($0, kind, window) }
+        )
+    }
+
     private var allProvidersStyleBinding: Binding<LimitStyle> {
         Binding(
             get: {
@@ -174,6 +181,18 @@ private struct GeneralTab: View {
                         .foregroundStyle(.secondary)
                 }
                 Toggle("Send a notification when a window crosses it", isOn: $settings.notificationsEnabled)
+                DisclosureGroup("Per-window thresholds") {
+                    ForEach(ProviderKind.allCases) { kind in
+                        ForEach(kind.supportedLimitWindows) { window in
+                            Picker("\(kind.displayName) \(window.displayName.lowercased())", selection: warnOverrideBinding(kind, window)) {
+                                Text("Global (\(Int(settings.warnBelowRemaining))%)").tag(Double?.none)
+                                ForEach(Array(stride(from: 5.0, through: 45.0, by: 5.0)), id: \.self) { value in
+                                    Text("\(Int(value))%").tag(Double?.some(value))
+                                }
+                            }
+                        }
+                    }
+                }
             } header: {
                 Text("Low-limit warning")
             } footer: {
