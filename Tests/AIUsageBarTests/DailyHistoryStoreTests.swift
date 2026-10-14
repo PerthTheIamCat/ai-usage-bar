@@ -94,4 +94,31 @@ final class DailyHistoryStoreTests: XCTestCase {
         XCTAssertEqual(result.claudeTokens[0], 1000, "first recorded day should survive a later, unrelated record() call")
         XCTAssertEqual(result.claudeTokens[1], 2000, "second recorded day should also survive")
     }
+
+    func testExtendedTrendReachesBeyondLiveWindowAndLiveDataWins() {
+        // 10 days of history on disk, the live scan only sees the last 3.
+        DailyHistoryStore.record(trend(days: 10, activeIndex: 0, claudeTokens: 4000), fileURL: fileURL)
+        DailyHistoryStore.record(trend(days: 10, activeIndex: 9, claudeTokens: 111), fileURL: fileURL)
+
+        let live = trend(days: 3, activeIndex: 2, claudeTokens: 999)
+        let result = DailyHistoryStore.extendedTrend(days: 10, live: live, fileURL: fileURL)
+
+        XCTAssertEqual(result.days.count, 10)
+        XCTAssertEqual(result.claudeTokens[0], 4000, "old day beyond the live window comes from the store")
+        XCTAssertEqual(result.claudeTokens[9], 999, "live data wins over the stored value for today")
+    }
+
+    func testExtendedTrendAllSpansFromEarliestRecordedDay() {
+        DailyHistoryStore.record(trend(days: 12, activeIndex: 0, claudeTokens: 50), fileURL: fileURL)
+
+        let result = DailyHistoryStore.extendedTrend(days: nil, live: trend(days: 3), fileURL: fileURL)
+
+        XCTAssertEqual(result.days.count, 12)
+        XCTAssertEqual(result.claudeTokens[0], 50)
+    }
+
+    func testExtendedTrendAllWithNoHistoryFallsBackToLiveLength() {
+        let result = DailyHistoryStore.extendedTrend(days: nil, live: trend(days: 3), fileURL: fileURL)
+        XCTAssertEqual(result.days.count, 3)
+    }
 }

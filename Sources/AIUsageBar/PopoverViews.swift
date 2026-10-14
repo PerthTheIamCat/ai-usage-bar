@@ -929,7 +929,14 @@ struct AnalyticsPane: View {
 
     /// The cached 30-day trend covers both range options — a 7-day view is
     /// just its last 7 entries, so switching ranges doesn't need a re-fetch.
+    ///
+    /// 90 days / All (`0`) reach past the live scan, so they're built from
+    /// `DailyHistoryStore`'s recorded days with the live trend laid over it.
     private func trend(for days: Int) -> DailyTrend? {
+        if days > 30 || days == 0 {
+            guard let live = snap.dailyTrend else { return nil }
+            return DailyHistoryStore.extendedTrend(days: days == 0 ? nil : days, live: live)
+        }
         guard let full = snap.dailyTrend, full.days.count >= days else { return nil }
         var sliced = DailyTrend()
         sliced.days = Array(full.days.suffix(days))
@@ -997,10 +1004,12 @@ struct AnalyticsPane: View {
                     Picker("", selection: $trendDays) {
                         Text("7 days").tag(7)
                         Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                        Text("All").tag(0)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 150)
+                    .frame(width: 230)
                 }
                 if let trend = trend(for: trendDays) {
                     if let busiest = trend.busiestWeekday, trend.days.count > 7 {
