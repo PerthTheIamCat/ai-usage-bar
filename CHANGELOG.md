@@ -4,6 +4,16 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **8-bit Desktop Companion:** Added a customizable Stardew Valley-inspired animated pixel-art companion (Farmer, Junimo spirit, Farm Cat) that walks, sprints, works, stretches, and sleeps across your desktop.
+- **Provider-Adaptive Mascots & Subagent Parades:** Automatically adapts the mascot archetype to whichever AI provider is active (Claude Code, Codex, or Antigravity). Real-time detection of background subagents (e.g. `audit_agent`, `research`) spawns mini Junimo helpers in a follower parade.
+- **Evolution & Growth System:** Lifetime token usage drives 4 growth stages (Seedling, Apprentice, Master Artisan, Stardew Legend with a shimmering Stardrop crown) with an 8-bit XP progress bar and level-up celebrations.
+- **8-bit Trophy Case & Achievements:** 10 Stardew-themed milestones (First Sprout, Season Harvest, Ten Millionaire, Grandmaster Hacker, Speed Demon, Midnight Oil, Security First, Duckling Parade, Frugal Genius, Edge Dancer) with retro banner celebrations.
+- **Mouse & Cursor Interactivity:** Real-time pointer tracking, hover-to-pet with floating hearts (`❤️ 💕`) and purrs, and click & poke spring jumps with cheerful 8-bit quotes. Fully functional in both click-through and standard modes.
+- **Hold & Drag, Gravity Drop & Dust Blow:** Click and drag to pick up your companion with flailing legs and altitude awareness. Release to drop with gravity acceleration (`1,700 px/s²`) and ground impact with dual 8-bit dust blow puffs (`💨 💨`).
+- **Companion Settings & Test Controls:** Added a dedicated Companion settings pane with cursor reaction modes (All, Pet & Watch, Curious Follow, Playful Dodge, Disabled), provider mascot overrides, speed controls, and a complete animation test grid.
+
 ## [0.15.0] - 2026-10-14
 
 ### Added

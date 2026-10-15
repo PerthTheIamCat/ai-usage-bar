@@ -14,6 +14,8 @@ struct SettingsView: View {
                 .tabItem { Label("Providers", systemImage: "arrow.up.arrow.down") }
             AccountsTab()
                 .tabItem { Label("Accounts", systemImage: "person.2") }
+            CompanionTab()
+                .tabItem { Label("Companion", systemImage: "figure.walk") }
             CostTab()
                 .tabItem { Label("Cost", systemImage: "dollarsign.circle") }
             LogTab()
@@ -827,6 +829,258 @@ private struct ChangelogTab: View {
             return
         }
         lines = parseChangelog(text)
+    }
+}
+
+private struct CompanionTab: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var progression = ProgressionStore.shared
+    @State private var previewFrameIndex = 0
+    @State private var previewTimer: Timer?
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable 8-bit Desktop Companion", isOn: $settings.companionEnabled)
+                    .onChange(of: settings.companionEnabled) { enabled in
+                        if enabled {
+                            CompanionManager.shared.start()
+                        } else {
+                            CompanionManager.shared.stop()
+                        }
+                    }
+
+                Text("A cute Stardew Valley-inspired 8-bit character runs around your screen and reacts to active AI generation with speech bubbles and animations.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if settings.companionEnabled {
+                Section(header: Text("Character & AI Provider")) {
+                    Toggle("Auto-match active AI provider", isOn: $settings.companionAutoProvider)
+                    Text("Dynamically switches the mascot to match whichever AI provider you are actively coding with.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if settings.companionAutoProvider {
+                        Picker("Claude Code", selection: $settings.companionClaudeMascot) {
+                            ForEach(CompanionCharacter.allCases) { char in
+                                Text(char.displayName).tag(char)
+                            }
+                        }
+                        Picker("OpenAI Codex", selection: $settings.companionCodexMascot) {
+                            ForEach(CompanionCharacter.allCases) { char in
+                                Text(char.displayName).tag(char)
+                            }
+                        }
+                        Picker("Antigravity", selection: $settings.companionAntigravityMascot) {
+                            ForEach(CompanionCharacter.allCases) { char in
+                                Text(char.displayName).tag(char)
+                            }
+                        }
+                    } else {
+                        Picker("Mascot Style", selection: $settings.companionCharacter) {
+                            ForEach(CompanionCharacter.allCases) { char in
+                                Text(char.displayName).tag(char)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 6) {
+                            let activeChar = settings.companionAutoProvider ? settings.mascot(for: CompanionManager.shared.activeProvider) : settings.companionCharacter
+                            let frames = PixelSpriteLibrary.frames(for: activeChar, state: .walking)
+                            let current = frames.indices.contains(previewFrameIndex) ? frames[previewFrameIndex] : (frames.first ?? PixelSpriteLibrary.farmerIdle1)
+                            PixelFrameView(frame: current, pixelSize: 4.0)
+                                .frame(height: 80)
+                            Text("Preview (\(activeChar.displayName))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.1)))
+                        Spacer()
+                    }
+                }
+
+                Section(header: Text("Subagents & Followers")) {
+                    Toggle("Spawn buddy for each running subagent", isOn: $settings.companionSpawnSubagents)
+                    Text("Whenever an AI subagent runs (e.g. audit_agent, research), a mini helper buddy spawns and follows your companion in a lively parade!")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Section(header: Text("Behavior & Speed")) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Movement Speed")
+                            Spacer()
+                            Text(String(format: "%.1fx", settings.companionSpeed))
+                                .foregroundColor(.secondary)
+                                .monospacedDigit()
+                        }
+                        Slider(value: $settings.companionSpeed, in: 0.5...2.5, step: 0.1)
+                    }
+
+                    Toggle("Show AI speech bubbles", isOn: $settings.companionSpeechEnabled)
+                    Text("Shows live tools, token counts, and quota notifications in pixel speech bubbles.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Toggle("Click-through mode (ignore mouse)", isOn: $settings.companionClickThrough)
+                    Text("When enabled, mouse clicks pass directly through to windows underneath. Turn off to drag or tap the companion.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Section(header: Text("Mouse & Cursor Interactivity")) {
+                    Picker("Cursor Reaction", selection: $settings.companionCursorMode) {
+                        ForEach(CompanionCursorMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("• **Hover**: Pet companion to see floating hearts & purrs 💕")
+                        Text("• **Click / Poke**: Jump, spin, and say a fun quote ⭐")
+                        Text("• **Watch**: Follows cursor with eyes / facing direction")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+
+                Section(header: Text("Evolution & Growth")) {
+                    HStack(spacing: 12) {
+                        Text(progression.currentStage.badgeIcon)
+                            .font(.system(size: 32))
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(progression.currentStage.title)
+                                    .font(.headline)
+                                Spacer()
+                                Text("Stage \(progression.currentStage.rawValue) of 4")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Text("\(formatTokens(progression.lifetimeTokens)) lifetime tokens burned")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let target = progression.currentStage.nextStageTargetTokens {
+                            HStack {
+                                Text("Next Evolution Goal: \(formatTokens(target)) tokens")
+                                    .font(.caption)
+                                Spacer()
+                                Text("\(Int((progression.progressToNextStage * 100).rounded()))%")
+                                    .font(.caption)
+                                    .monospacedDigit()
+                                    .foregroundColor(.secondary)
+                            }
+                            ProgressView(value: progression.progressToNextStage)
+                        } else {
+                            Text("✨ Maximum Evolution Reached! You are a Stardew Legend.")
+                                .font(.caption)
+                                .foregroundColor(.yellow)
+                        }
+                    }
+                }
+
+                Section(header: Text("Trophy Case & Achievements (\(progression.unlockedAchievements.count)/\(ProgressionStore.catalog.count))")) {
+                    ForEach(progression.achievementsList) { ach in
+                        HStack(spacing: 10) {
+                            Text(ach.icon)
+                                .font(.system(size: 20))
+                                .opacity(ach.isUnlocked ? 1.0 : 0.35)
+                                .frame(width: 28)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(ach.title)
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundColor(ach.isUnlocked ? .primary : .secondary)
+                                    Spacer()
+                                    if let date = ach.unlockedAt {
+                                        Text(date.formatted(date: .abbreviated, time: .omitted))
+                                            .font(.system(size: 9))
+                                            .foregroundColor(.green)
+                                    } else {
+                                        Text("Locked")
+                                            .font(.system(size: 9))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Text(ach.description)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                Section(header: Text("Test Animations & Actions")) {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                        Button("Water / Work") {
+                            CompanionManager.shared.triggerAction(.working, speechText: "Watering crops (file_edit)!", icon: "🔧")
+                        }
+                        Button("Celebrate") {
+                            CompanionManager.shared.triggerAction(.celebrating, speechText: "Stardrop celebration!", icon: "✨")
+                        }
+                        Button("Stretch / Yawn") {
+                            CompanionManager.shared.triggerAction(.stretching, speechText: "Taking a quick stretch!", icon: "🧘")
+                        }
+                        Button("Sprint Zoomies") {
+                            CompanionManager.shared.triggerAction(.sprinting, speechText: "+1,850 tokens!", icon: "⚡️")
+                        }
+                        Button("Speech Bubble") {
+                            CompanionManager.shared.speak(text: "Harvesting code!", icon: "🌾", duration: 3.5)
+                        }
+                        Button("Sleep Nap") {
+                            CompanionManager.shared.triggerAction(.sleeping)
+                        }
+                        Button("Spawn Subagent Buddy") {
+                            CompanionManager.shared.simulateSubagentBuddy()
+                        }
+                        Button("Simulate Level Up") {
+                            ProgressionStore.shared.simulateLevelUpTest()
+                        }
+                        Button("Unlock Test Trophy") {
+                            ProgressionStore.shared.simulateUnlockTest()
+                        }
+                        Button("Poke Companion (Click)") {
+                            CompanionManager.shared.poke()
+                        }
+                        Button("Pet Companion (Hover)") {
+                            CompanionManager.shared.simulatePetting()
+                        }
+                        Button("Drop & Dust Puff (Test)") {
+                            CompanionManager.shared.simulateDropTest()
+                        }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            previewTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+                let frames = PixelSpriteLibrary.frames(for: settings.companionCharacter, state: .walking)
+                if !frames.isEmpty {
+                    previewFrameIndex = (previewFrameIndex + 1) % frames.count
+                }
+            }
+        }
+        .onDisappear {
+            previewTimer?.invalidate()
+            previewTimer = nil
+        }
     }
 }
 

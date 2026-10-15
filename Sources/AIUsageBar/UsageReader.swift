@@ -81,9 +81,93 @@ enum UsageReader {
             progress?("Calculating 30-day trend…")
             snap.dailyTrend = dailyTrend(days: 30)
         }
+        snap.activeSubagents = detectActiveSubagents()
         progress?("Updating display…")
         snap.updatedAt = Date()
         return snap
+    }
+
+    /// Scans for actively running subagents and parallel sessions across Antigravity and Claude Code.
+    static func detectActiveSubagents() -> [ActiveSubagentInfo] {
+        var subagents: [ActiveSubagentInfo] = []
+        let fm = FileManager.default
+        let cutoff = Date().addingTimeInterval(-60) // active in last 60 seconds
+
+        // 1. Antigravity Subagents & Tasks
+        let brainDir = antigravityDir.appendingPathComponent("brain")
+        if fm.fileExists(atPath: brainDir.path),
+           let convs = try? fm.contentsOfDirectory(at: brainDir, includingPropertiesForKeys: [.contentModificationDateKey])
+        {
+            for conv in convs {
+                guard let vals = try? conv.resourceValues(forKeys: [.contentModificationDateKey]),
+                      let mdate = vals.contentModificationDate,
+                      mdate > cutoff
+                else { continue }
+
+                // Check for tasks
+                let tasksDir = conv.appendingPathComponent(".system_generated/tasks")
+                if let taskFiles = try? fm.contentsOfDirectory(at: tasksDir, includingPropertiesForKeys: [.contentModificationDateKey]) {
+                    for taskFile in taskFiles where taskFile.pathExtension == "log" {
+                        guard let tvals = try? taskFile.resourceValues(forKeys: [.contentModificationDateKey]),
+                              let tmdate = tvals.contentModificationDate,
+                              tmdate > cutoff
+                        else { continue }
+                        let taskName = taskFile.deletingPathExtension().lastPathComponent
+                        subagents.append(ActiveSubagentInfo(
+                            id: "ag-task-\(conv.lastPathComponent.prefix(6))-\(taskName)",
+                            role: "Task Runner (\(taskName))",
+                            tool: nil,
+                            provider: .antigravity,
+                            lastActive: tmdate
+                        ))
+                    }
+                }
+
+                // Check for active subagent transcript
+                let transcript = conv.appendingPathComponent(".system_generated/logs/transcript.jsonl")
+                if let tvals = try? transcript.resourceValues(forKeys: [.contentModificationDateKey]),
+                   let tmdate = tvals.contentModificationDate,
+                   tmdate > cutoff
+                {
+                    subagents.append(ActiveSubagentInfo(
+                        id: "ag-sub-\(conv.lastPathComponent.prefix(8))",
+                        role: "Subagent",
+                        tool: nil,
+                        provider: .antigravity,
+                        lastActive: tmdate
+                    ))
+                }
+            }
+        }
+
+        // 2. Claude Code Concurrent Sessions / Sub-tasks
+        if fm.fileExists(atPath: claudeDir.path),
+           let projects = try? fm.contentsOfDirectory(at: claudeDir, includingPropertiesForKeys: [.contentModificationDateKey])
+        {
+            var activeCount = 0
+            for proj in projects {
+                guard let projFiles = try? fm.contentsOfDirectory(at: proj, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
+                for file in projFiles where file.pathExtension == "jsonl" {
+                    guard let fvals = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
+                          let fmdate = fvals.contentModificationDate,
+                          fmdate > cutoff
+                    else { continue }
+                    activeCount += 1
+                    if activeCount > 1 {
+                        subagents.append(ActiveSubagentInfo(
+                            id: "claude-sub-\(file.deletingPathExtension().lastPathComponent.prefix(8))",
+                            role: "Claude Subagent",
+                            tool: nil,
+                            provider: .claude,
+                            lastActive: fmdate
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Keep maximum of 4 active subagents to avoid cluttering screen
+        return Array(subagents.prefix(4))
     }
 
     /// Today's usage and limits for one extra account, read from its own
