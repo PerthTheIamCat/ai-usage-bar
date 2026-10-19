@@ -129,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.statusItemClicked()
         }
         TouchBarManager.shared.start()
+        CompanionManager.shared.start()
 
         NotificationCenter.default.addObserver(
             forName: .usageSettingsChanged, object: nil, queue: .main
@@ -515,6 +516,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateAntigravityAnimation(isWorking: snap.antigravity?.isWorking == true)
         UsageNotifier.shared.check(snap)
         TouchBarManager.shared.update(snapshot: snap)
+
+        if snap.antigravity?.isWorking == true {
+            CompanionManager.shared.reportAIActivity(provider: "Antigravity", isGenerating: true)
+        } else if let latestSession = snap.claude?.sessions.first, let lastAct = latestSession.lastActivityAt, Date().timeIntervalSince(lastAct) < 45 {
+            let tool = latestSession.tools.keys.first
+            CompanionManager.shared.reportAIActivity(provider: "Claude", tool: tool, tokens: latestSession.tokenTotal, isGenerating: true)
+        } else if let latestCodex = snap.codex?.sessions.first, let lastAct = latestCodex.lastActivityAt, Date().timeIntervalSince(lastAct) < 45 {
+            let tool = latestCodex.tools.keys.first
+            CompanionManager.shared.reportAIActivity(provider: "Codex", tool: tool, tokens: latestCodex.tokenTotal, isGenerating: true)
+        }
+
+        CompanionManager.shared.syncSubagents(snap.activeSubagents)
+        ProgressionStore.shared.evaluate(snapshot: snap)
     }
 
     /// Starts or stops the icon-spin timer to match Antigravity's actual

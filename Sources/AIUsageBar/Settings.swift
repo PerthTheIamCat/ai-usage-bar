@@ -171,6 +171,26 @@ enum ProviderKind: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+enum CompanionCursorMode: String, CaseIterable, Identifiable, Codable {
+    case all
+    case petOnly
+    case follow
+    case dodge
+    case disabled
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: return "All (Watch, Pet & Follow)"
+        case .petOnly: return "Pet & Watch (Hearts on hover)"
+        case .follow: return "Curious Follow (Chases cursor)"
+        case .dodge: return "Playful Dodge (Dashes away)"
+        case .disabled: return "Disabled"
+        }
+    }
+}
+
 /// UserDefaults-backed app settings, observable from SwiftUI.
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
@@ -208,6 +228,17 @@ final class AppSettings: ObservableObject {
         static let touchBarEnabled = "touchBarEnabled"
         static let forceTouchBarSupport = "forceTouchBarSupport"
         static let extraAccounts = "extraAccounts"
+        static let companionEnabled = "companionEnabled"
+        static let companionCharacter = "companionCharacter"
+        static let companionSpeed = "companionSpeed"
+        static let companionSpeechEnabled = "companionSpeechEnabled"
+        static let companionClickThrough = "companionClickThrough"
+        static let companionAutoProvider = "companionAutoProvider"
+        static let companionClaudeMascot = "companionClaudeMascot"
+        static let companionCodexMascot = "companionCodexMascot"
+        static let companionAntigravityMascot = "companionAntigravityMascot"
+        static let companionSpawnSubagents = "companionSpawnSubagents"
+        static let companionCursorMode = "companionCursorMode"
     }
 
     /// Additional Claude / Codex accounts, each read from its own config
@@ -242,6 +273,91 @@ final class AppSettings: ObservableObject {
         didSet {
             UserDefaults.standard.set(forceTouchBarSupport, forKey: Keys.forceTouchBarSupport)
             NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(companionEnabled, forKey: Keys.companionEnabled)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionCharacter: CompanionCharacter {
+        didSet {
+            UserDefaults.standard.set(companionCharacter.rawValue, forKey: Keys.companionCharacter)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionSpeed: Double {
+        didSet {
+            UserDefaults.standard.set(companionSpeed, forKey: Keys.companionSpeed)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionSpeechEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(companionSpeechEnabled, forKey: Keys.companionSpeechEnabled)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionClickThrough: Bool {
+        didSet {
+            UserDefaults.standard.set(companionClickThrough, forKey: Keys.companionClickThrough)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionAutoProvider: Bool {
+        didSet {
+            UserDefaults.standard.set(companionAutoProvider, forKey: Keys.companionAutoProvider)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionClaudeMascot: CompanionCharacter {
+        didSet {
+            UserDefaults.standard.set(companionClaudeMascot.rawValue, forKey: Keys.companionClaudeMascot)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionCodexMascot: CompanionCharacter {
+        didSet {
+            UserDefaults.standard.set(companionCodexMascot.rawValue, forKey: Keys.companionCodexMascot)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionAntigravityMascot: CompanionCharacter {
+        didSet {
+            UserDefaults.standard.set(companionAntigravityMascot.rawValue, forKey: Keys.companionAntigravityMascot)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionSpawnSubagents: Bool {
+        didSet {
+            UserDefaults.standard.set(companionSpawnSubagents, forKey: Keys.companionSpawnSubagents)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    @Published var companionCursorMode: CompanionCursorMode {
+        didSet {
+            UserDefaults.standard.set(companionCursorMode.rawValue, forKey: Keys.companionCursorMode)
+            NotificationCenter.default.post(name: .usageSettingsChanged, object: nil)
+        }
+    }
+
+    func mascot(for provider: ProviderKind) -> CompanionCharacter {
+        switch provider {
+        case .claude: return companionClaudeMascot
+        case .codex: return companionCodexMascot
+        case .antigravity: return companionAntigravityMascot
         }
     }
 
@@ -705,5 +821,18 @@ final class AppSettings: ObservableObject {
         forceTouchBarSupport = d.object(forKey: Keys.forceTouchBarSupport) as? Bool ?? false
         extraAccounts = (d.data(forKey: Keys.extraAccounts))
             .flatMap { try? JSONDecoder().decode([ExtraAccount].self, from: $0) } ?? []
+
+        companionEnabled = d.object(forKey: Keys.companionEnabled) as? Bool ?? false
+        companionCharacter = CompanionCharacter(rawValue: d.string(forKey: Keys.companionCharacter) ?? "") ?? .farmer
+        let storedSpeed = d.double(forKey: Keys.companionSpeed)
+        companionSpeed = storedSpeed > 0 ? storedSpeed : 1.0
+        companionSpeechEnabled = d.object(forKey: Keys.companionSpeechEnabled) as? Bool ?? true
+        companionClickThrough = d.object(forKey: Keys.companionClickThrough) as? Bool ?? true
+        companionAutoProvider = d.object(forKey: Keys.companionAutoProvider) as? Bool ?? true
+        companionClaudeMascot = CompanionCharacter(rawValue: d.string(forKey: Keys.companionClaudeMascot) ?? "") ?? .farmer
+        companionCodexMascot = CompanionCharacter(rawValue: d.string(forKey: Keys.companionCodexMascot) ?? "") ?? .cat
+        companionAntigravityMascot = CompanionCharacter(rawValue: d.string(forKey: Keys.companionAntigravityMascot) ?? "") ?? .junimo
+        companionSpawnSubagents = d.object(forKey: Keys.companionSpawnSubagents) as? Bool ?? true
+        companionCursorMode = CompanionCursorMode(rawValue: d.string(forKey: Keys.companionCursorMode) ?? "") ?? .all
     }
 }

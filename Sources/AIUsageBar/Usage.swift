@@ -160,6 +160,14 @@ struct PeriodCosts {
     var antigravityUSD30: Double?
 }
 
+struct ActiveSubagentInfo: Identifiable, Equatable {
+    let id: String
+    let role: String
+    var tool: String?
+    let provider: ProviderKind
+    var lastActive: Date
+}
+
 struct UsageSnapshot {
     var claude: ClaudeUsage?       // nil = not detected
     var codex: CodexUsage?         // nil = not detected
@@ -171,6 +179,7 @@ struct UsageSnapshot {
     var dailyTrend: DailyTrend?
     /// Extra accounts added in Settings → Accounts, in the order added.
     var accounts: [AccountReading] = []
+    var activeSubagents: [ActiveSubagentInfo] = []
     var updatedAt = Date()
 }
 
