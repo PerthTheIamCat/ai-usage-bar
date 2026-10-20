@@ -4,6 +4,8 @@ All notable changes to AI Usage Bar are documented in this file.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-20
+
 ### Added
 
 - **8-bit Desktop Companion:** Added a customizable Stardew Valley-inspired animated pixel-art companion (Farmer, Junimo spirit, Farm Cat) that walks, sprints, works, stretches, and sleeps across your desktop.

@@ -9,7 +9,7 @@ Claude Code · Codex · Antigravity — แสดงสดบนเมนูบ�
 
 [English](README.md) &nbsp;|&nbsp; **ภาษาไทย**
 
-[![ดาวน์โหลด](https://img.shields.io/badge/⬇_ดาวน์โหลด-v0.15.0_.dmg-0A84FF?style=for-the-badge)](https://github.com/PerthTheIamCat/ai-usage-bar/releases/latest)
+[![ดาวน์โหลด](https://img.shields.io/badge/⬇_ดาวน์โหลด-v0.16.0_.dmg-0A84FF?style=for-the-badge)](https://github.com/PerthTheIamCat/ai-usage-bar/releases/latest)
 &nbsp;
 ![macOS](https://img.shields.io/badge/macOS-13%2B-1d1d1f?style=for-the-badge&logo=apple)
 ![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-arm64-1d1d1f?style=for-the-badge)

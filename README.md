@@ -9,7 +9,7 @@ Claude Code · Codex · Antigravity — live in the macOS menu bar.
 
 **English** &nbsp;|&nbsp; [ภาษาไทย](README.th.md)
 
-[![Download](https://img.shields.io/badge/⬇_Download-v0.15.0_.dmg-0A84FF?style=for-the-badge)](https://github.com/PerthTheIamCat/ai-usage-bar/releases/latest)
+[![Download](https://img.shields.io/badge/⬇_Download-v0.16.0_.dmg-0A84FF?style=for-the-badge)](https://github.com/PerthTheIamCat/ai-usage-bar/releases/latest)
 &nbsp;
 ![macOS](https://img.shields.io/badge/macOS-13%2B-1d1d1f?style=for-the-badge&logo=apple)
 ![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-arm64-1d1d1f?style=for-the-badge)
